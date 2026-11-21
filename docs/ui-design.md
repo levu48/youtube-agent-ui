@@ -139,6 +139,29 @@ Layout:
 - Actions: `Back to Project`, `Refresh`, optional `Copy text`; no save/edit/approve controls in M1.
 - No unverified claim that a draft is approved.
 
+### 4.5 Milestone 2 (first part): validation and G1 approval on the draft page
+Implemented before editing, which waits for an engine edit command (see `milestone-2.md`).
+- **Header:** keeps the `Read-only` badge, because the text is still not editable, and adds the engine's G1 badge: `G1 not approved`, `G1 approved` or `G1 approval out of date`.
+- **Actions:** `Refresh` becomes `Validate Draft`, which runs the engine's draft-check again. The validation panel says that passing checks is not approval.
+- **Approval panel** (`Editorial approval (G1)`), below validation:
+  - **The engine's record**, if one exists: the reviewer, time and comment. It sits on a green background if the approval is current. If it is stale, it sits on an amber background and names the changed files: "Previously approved by …".
+  - **The form**, hidden while the approval is current:
+    - a required reviewer name, remembered in this browser only;
+    - an optional comment;
+    - the button `Approve Editorial Draft (G1)`. When it is disabled, its description gives the reason: a job is running, the check failed or couldn't run, or the draft changed while it was being checked.
+  - **Confirmation dialog** `Approve this editorial draft (G1)?`. It says approval does **not** verify historical claims, rights or release readiness. It lists the review blockers that will be recorded with the approval, in a scrollable list that keyboard users can focus. Its buttons are `Go back` and `Approve draft`.
+  - **Errors** appear in an alert in the panel:
+    - an engine refusal, with the engine's list of errors;
+    - a changed draft, with `Load the latest draft`;
+    - a conflict;
+    - a version mismatch.
+  - **After approval**, the panel shows what the engine reports, never a state the UI guessed.
+- **Workspace next action:**
+  - "Review the draft" / "Review & Approve";
+  - "Review the draft again" when the approval is stale;
+  - "Check the draft" when the engine reports the draft is invalid.
+- **Never:** approval doesn't start research or any other stage, and the UI never writes `review.json`.
+
 ## 5. Components and design contracts
 
 Implement reusable components:

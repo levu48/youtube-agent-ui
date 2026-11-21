@@ -90,3 +90,47 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ### Minimum compatible capabilities
 `ytagent --version`; `create … --draft-provider none`; `draft --provider {ollama,fixture} --model --from-stage`; `production-status --json`; `draft-check --json`. The backend checks `--version` at startup and reports `available: false` with a reason if the CLI cannot run.
+
+## Milestone 2 findings (2026-11-21, engine `d1325c4`)
+
+Verified against a read-only clone of `youtube-agent` at `d1325c44ac04e0495f4bc42976d3058cd4d43467` (`ytagent 0.1.0`). `origin/main` had no newer commits.
+
+### Editing: no supported command at this revision
+The engine has no CLI for editing drafts. Its docs describe `outline.json` and `script.json` as human-editable by hand, but hand edits cannot be made safely from the UI:
+- **Hash links make dependents stale.** `script.json` records `outline_sha256` and `input_sha256`, and `storyboard.draft.json` records `script_sha256` and `outline_sha256`. Changing the outline makes the script and storyboard stale; that is an error, and approval is refused.
+- **Narration is stored twice.** It lives in `script.json` sections and again, split into scenes, in `storyboard.draft.json`. `spoken_units` and `estimated_duration_seconds` are derived from it, and `outline.md`/`script.md` are generated views.
+- **Edit protection is based on bytes.** A file whose bytes differ from the engine's manifest counts as `edited` and is protected from regeneration (see the `state` of each entry in `draft-check --json` `artifacts`).
+
+Browser editing therefore waits for an engine `draft-edit` command (a separate engine PR). The UI does not write any engine file.
+
+### `draft-approve` (G1)
+```
+usage: ytagent draft-approve [-h] --project-root PROJECT_ROOT
+                             [--reviewer REVIEWER] [--comment COMMENT]
+  --reviewer REVIEWER   reviewer name (default: $YTA_REVIEWER or the OS user)
+  --comment COMMENT     optional review comment
+```
+- **Under the draft lock:** it runs the same check as `draft-check`. If the report is not `ok`, it prints `error: cannot approve: the draft has errors:` followed by one `  - <error>` line per error to stderr and exits **2**. Nothing is written.
+- **On success:** it writes `review.json` atomically. The file holds `reviewer`, `approved_at`, `comment`, the SHA-256 of every file in `REVIEWED`, `unresolved_blockers` (the check's `review_blockers`) and `meaning`. Each reviewed file is hashed again immediately before the rename, so a concurrent edit is never approved. Output is **text only**, `approved by <name>; recorded in …`, and the exit code is 0.
+- **Review blockers do not prevent approval.** They are recorded with it, so the UI lists them in the confirmation dialog.
+- **Repeat approval:** if the current approval still matches, it prints `already approved by <name> at <time>Z` and exits 0 without writing anything.
+- **Lock contention** exits 9. A missing project root exits 2.
+- **Reviewed files** (`REVIEWED`): `input.json`, `outline.json`, `script.json`, `storyboard.draft.json`, and `assets.json` if present.
+- **Approval status** comes from `draft-check --json` `approval_status`:
+  - `not_approved`;
+  - `approved`;
+  - `stale`, with the changed files in `approval_changed`; an unreadable `review.json` also counts as `stale`.
+  
+  `draft-check` doesn't report the reviewer or time, so the UI reads `review.json` for display only.
+- **`production-status` for the draft stage:**
+
+  | Situation | `status` | `detail` |
+  |---|---|---|
+  | Not drafted | `blocked` | `G1 editorial: missing` |
+  | Drafted, not approved | `needs_review` | `G1 editorial: not_approved` |
+  | Approved | `completed` | `G1 editorial: approved` |
+  | Draft invalid (for example after an outside change made the script stale) | `blocked` | `G1 editorial: invalid` |
+
+**How the UI uses it.** The UI always passes `--reviewer` explicitly. It calls `draft-approve` only after checking that the reviewed files still match the version the reviewer validated, because the engine at this revision has no `--expect-revision`. A small window remains between that check and the engine's own snapshot. The UI detects it afterwards by comparing `review.json` with the hashes it checked, and reports it (`approved_version_matches: false`). An engine-side `--expect-revision` (engine PR) closes the window.
+
+Minimum compatible capabilities for M2 (review and approve): the M1 set plus `draft-approve --project-root --reviewer [--comment]`.
