@@ -140,7 +140,7 @@ def test_status_bad_json_reported(client, fake_cli):
     client.post("/api/v1/projects", json=PROJECT)
     fake_cli.env["FAKE_MODE"] = "bad_json"
     st = client.get("/api/v1/projects/hcm-demo/status").json()
-    assert st["available"] is False and "malformed" in st["error"]
+    assert st["available"] is False and st["error_code"] == "engine_bad_json"
     r = client.get("/api/v1/projects/hcm-demo/draft-check")
     assert r.status_code == 502 and r.json()["error"]["code"] == "engine_bad_json"
 

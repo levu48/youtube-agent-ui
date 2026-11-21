@@ -14,7 +14,7 @@ from app import __version__
 from app.artifacts import draft_files_present, read_draft
 from app.config import home_relative
 from app.engine import commands
-from app.engine.service import EngineReadError
+from app.engine.public_errors import to_public
 from app.errors import ApiError
 from app.ollama import model_installed, ollama_info
 from app.projects import ProjectRow, read_input
@@ -26,6 +26,7 @@ from app.schemas import (
     Health,
     JobCreated,
     JobDetail,
+    JobEventPage,
     JobOut,
     LocationPreview,
     OllamaInfo,
@@ -175,24 +176,24 @@ async def project_draft_check(project_id: str, s: State) -> dict:
     root = s.projects.confined_root(row)
     try:
         return await s.engine.draft_check(root)
-    except EngineReadError as exc:
-        raise ApiError(502, exc.code, exc.message, {"diagnostic": exc.diagnostic}) from None
+    except Exception as exc:
+        pe = to_public(exc, operation="draft-check")
+        raise ApiError(pe.status, pe.code, pe.message) from None
 
 
 @router.get("/projects/{project_id}/draft")
 async def project_draft(project_id: str, s: State) -> dict:
+    """Artifacts plus the engine's draft-check. A failed check is reported with the same
+    sanitized ``{code, message}`` as ``/draft-check`` would return, never a raw exception."""
     row = s.projects.require(project_id)
     root = s.projects.confined_root(row)
     out = read_draft(root)
     try:
         out["draft_check"] = await s.engine.draft_check(root)
         out["draft_check_error"] = None
-    except EngineReadError as exc:
+    except Exception as exc:
         out["draft_check"] = None
-        out["draft_check_error"] = exc.message
-    except Exception as exc:  # engine unavailable
-        out["draft_check"] = None
-        out["draft_check_error"] = str(exc)
+        out["draft_check_error"] = to_public(exc, operation="draft-check").as_dict()
     return out
 
 
@@ -258,6 +259,26 @@ async def get_job(
     job_id: str, s: State, events: Annotated[int, Query(ge=0, le=1000)] = 200
 ) -> JobDetail:
     return s.jobs.detail(job_id, limit=events)
+
+
+@router.get("/jobs/{job_id}/events/page", response_model=JobEventPage)
+async def job_events_page(
+    job_id: str,
+    s: State,
+    after: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> JobEventPage:
+    """Polling fallback: page through events after a cursor without gaps or duplicates."""
+    job = s.jobs.get(job_id)
+    batch = s.jobs.events_after(job_id, after, limit + 1)
+    page = batch[:limit]
+    return JobEventPage(
+        job_id=job_id,
+        status=job.status,
+        events=[e.out() for e in page],
+        next_after=page[-1].id if page else after,
+        has_more=len(batch) > limit,
+    )
 
 
 @router.get("/jobs/{job_id}/events")

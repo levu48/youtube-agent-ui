@@ -85,6 +85,7 @@ class StatusSummary(BaseModel):
     stages: list[StageOut] = []
     current_stage: StageOut | None = None
     error: str | None = None
+    error_code: str | None = None
 
 
 class JobOut(BaseModel):
@@ -110,6 +111,16 @@ class JobEventOut(BaseModel):
     type: str
     data: dict[str, Any]
     created_at: str
+
+
+class JobEventPage(BaseModel):
+    """Cursor page of persisted events: every event with id > ``after``, in order."""
+
+    job_id: str
+    status: JobStatus
+    events: list[JobEventOut]
+    next_after: int
+    has_more: bool
 
 
 class JobDetail(JobOut):
@@ -202,3 +213,8 @@ class Health(BaseModel):
 
 class Session(BaseModel):
     csrf_token: str
+
+
+class PublicErrorOut(BaseModel):
+    code: str
+    message: str

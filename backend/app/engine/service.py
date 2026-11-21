@@ -9,6 +9,7 @@ from typing import Any
 
 from app.config import home_relative
 from app.engine import commands
+from app.engine.public_errors import FIXED, to_public
 from app.engine.runner import EngineCLI, EngineResult, EngineUnavailable
 from app.schemas import EngineInfo, StageOut, StatusSummary
 
@@ -59,12 +60,13 @@ class EngineService:
         try:
             data = await self._json(commands.production_status_args(root))
             stages = [StageOut.model_validate(s) for s in data.get("stages", [])]
-        except EngineUnavailable as exc:
-            summary = StatusSummary(available=False, error=str(exc))
-        except EngineReadError as exc:
-            summary = StatusSummary(available=False, error=exc.message)
         except (AttributeError, TypeError, ValueError):
-            summary = StatusSummary(available=False, error="Unrecognised status format.")
+            summary = StatusSummary(
+                available=False, error=FIXED["engine_bad_json"][1], error_code="engine_bad_json"
+            )
+        except Exception as exc:  # normalized; diagnostics are logged, not returned
+            pe = to_public(exc, operation="production-status")
+            summary = StatusSummary(available=False, error=pe.message, error_code=pe.code)
         else:
             summary = StatusSummary(available=True, stages=stages, current_stage=_current(stages))
         self._status_cache[project_id] = (time.monotonic(), summary)
