@@ -64,7 +64,11 @@ The second review found that the `engine` job reported success when `ENGINE_REPO
 - `E2E_ENGINE=real` with no engine: `serve.mjs` threw `no engine checkout with .venv`;
 - `YTA_REQUIRE_ENGINE=1` with a missing engine: 3 failures instead of skips.
 
-**Status in GitHub CI:** `ENGINE_REPO_TOKEN` has not been added yet (only the repository owner can create it). Until it is added, the `engine` job **fails on purpose**, and PR #1 shows that job as failing. The real-engine evidence above comes from the identical script run locally.
+**Status in GitHub CI (2026-11-21):** the owner added `ENGINE_REPO_TOKEN`, and the `engine` job has passed in GitHub Actions ([run 44850693163, attempt 2](https://github.com/levu48/youtube-agent-ui/actions/runs/44850693163); commit `de5e981`). It checked out `youtube-agent` at `d1325c44ac04e0495f4bc42976d3058cd4d43467` (`ytagent 0.1.0`) and ran:
+- real-engine integration: 3 tests, 0 skipped, 0 failed;
+- real-engine Playwright: 10 passed, 1 skipped (the allowed slow-job cancel test), 0 failed.
+
+All four CI jobs (`backend`, `frontend`, `e2e`, `engine`) pass on PR #1.
 
 ## Manual smoke tests with the real engine and Ollama (`qwen3:8b`, Vietnamese)
 
@@ -93,7 +97,7 @@ Run through the dev servers (`./scripts/dev.sh`) with a scratch projects folder:
 ## Known limitations / follow-ups
 
 - **Browser cancel test runs on the fake engine only.** The real fixture provider finishes in about 0.2 s, too fast to cancel. Real-engine cancellation was checked manually with Ollama (above).
-- **Real-engine CI needs a secret.** The `engine` job fails until the owner adds `ENGINE_REPO_TOKEN`, because the engine repository is private. See the README.
+- **Real-engine CI depends on a token.** The `engine` job uses the `ENGINE_REPO_TOKEN` secret because the engine repository is private. If the token expires or is revoked, the job fails on purpose. Renew it as described in the README. Pull requests from forks do not receive the secret.
 - **Status cache.** `GET /projects` caches the engine status per project for 20 s. Changes made from the CLI (for example `draft-approve`) can take up to 20 s to show on the dashboard. The project page always asks the engine afresh.
 - **Single process.** The backend runs one process. A second backend pointed at the same `YTA_DATA_DIR` is not supported.
 - **Restart behaviour.** Jobs that were still queued when the backend restarted are marked `interrupted`, not resumed, by design. Start them again.
