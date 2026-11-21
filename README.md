@@ -54,17 +54,22 @@ cd backend && uv run ruff check . && uv run ruff format --check . && uv run pyte
 # Frontend: lint, types, component tests, production build
 cd frontend && npm run lint && npm run typecheck && npm test && npm run build
 
-# End-to-end: builds the frontend and starts an isolated backend on ports 8100/3100 using
-# the real engine, the fixture provider, a temp projects folder and an unreachable Ollama
-cd frontend && npx playwright install chromium && npm run test:e2e
+# End-to-end: builds the frontend and starts an isolated backend on ports 8100/3100 with a
+# temp projects folder and an unreachable Ollama.
+#   E2E_ENGINE=real  the real engine CLI with its offline fixture provider (default if found)
+#   E2E_ENGINE=fake  backend/tests/fake_engine.py, which replays captured engine output and
+#                    also runs the browser cancel test (slow jobs)
+cd frontend && npx playwright install chromium && E2E_ENGINE=real npm run test:e2e && E2E_ENGINE=fake npm run test:e2e
 ```
 
-None of the automated tests need Ollama, network access or paid services. If the sibling engine checkout is missing, the real-engine tests are skipped and say why. Set `YTA_TEST_ENGINE_REPO`, or `YTA_ENGINE_REPO` for the E2E tests, to point at the engine elsewhere.
+None of the automated tests need Ollama, network access or paid services. If the sibling engine checkout is missing, the real-engine tests are skipped and say why. Set `YTA_REQUIRE_ENGINE=1` to make them fail instead. Set `YTA_TEST_ENGINE_REPO`, or `YTA_ENGINE_REPO` for the E2E tests, to point at the engine elsewhere.
+
+**CI** (`.github/workflows/ci.yml`) runs backend lint and tests, frontend lint, types, tests and build, and Playwright against the fake engine. A fourth job runs the required real-engine integration and Playwright tests against a pinned `youtube-agent` revision. It needs a repository secret named `ENGINE_REPO_TOKEN` with read access to the private engine repo; without it the job only posts a notice.
 
 ## How it behaves
 
 - **Jobs.** A draft request returns `202` with a job ID. Only one job can be queued or running per project. At most one job runs at a time across the studio; any others wait with the status `queued`. The engine's output lines are stored as numbered events and streamed over SSE. The page resumes with `Last-Event-ID` after a disconnect, and falls back to polling if streaming keeps failing. The UI never shows a progress percentage. With Ollama, the engine logs one line per model request, so you see real progress lines followed by the final summary.
-- **Cancel.** Cancelling asks for confirmation. The backend sends SIGINT to the engine's process group (the engine exits cleanly with code 130), then SIGTERM, then SIGKILL after grace periods. The job shows `cancelled` only once the process has actually exited.
+- **Cancel and timeouts.** Cancelling asks for confirmation. The backend signals the engine's whole process group: SIGINT (the engine exits cleanly with code 130), then SIGTERM, then SIGKILL after grace periods. The job shows `cancelled` only once every process in the group has exited, including descendants of the `uv` launcher. Short read-only commands that time out are stopped the same way, so nothing keeps writing after the UI reports the timeout.
 - **Restart.** If the backend restarts, any job it was running is marked `interrupted`; success is never assumed. If the engine process is still alive and its identity checks out, it is interrupted. Running a new draft lets the engine recover through its own journal.
 - **Statuses.** Engine stages (for example `Draft · Awaiting review`) and job statuses (`Succeeded`) are shown separately. Exit code 16 is treated as an expected human-review gate, not a crash.
 

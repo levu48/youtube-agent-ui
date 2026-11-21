@@ -100,13 +100,23 @@ The endpoints above are implemented. The OpenAPI document generated from the Pyd
 | POST | `/projects/register` | `{ "slug" }`: register one discovered project. |
 | GET | `/projects/{id}/draft-available` | `{ "available": bool }` once `outline.json` and `script.json` are readable. |
 | GET | `/jobs?project_id=&limit=` | Recent jobs, newest first. |
+| GET | `/jobs/{id}/events/page?after=&limit=` | Cursor page of persisted events with `id > after` (limit ≤ 1000): `{job_id, status, events, next_after, has_more}`. Used to seed and to poll without gaps. |
 
 Clarifications:
 - `GET /projects` returns each project plus a `status` summary (`available`, `stages[]`, `current_stage`, `error`) taken from the engine's `production-status --json`. It is cached for up to 20 s and refreshed when a job finishes.
-- `GET /projects/{id}/draft` returns `{available, outline: {state, error, data, markdown}, script: {…}, draft_check, draft_check_error}`, where `state` is `ok | missing | malformed`.
-- `GET /projects/{id}/draft-check` relays the engine report. The engine exits 2 when `ok` is false; that is still a valid report.
+- `GET /projects/{id}/draft` returns `{available, outline: {state, error, data, markdown}, script: {…}, draft_check, draft_check_error}`, where `state` is `ok | missing | malformed`. When the check fails, `draft_check_error` is `{code, message}`: the same code and message that `GET /draft-check` returns in its error envelope.
+- `GET /projects/{id}/draft-check` relays the engine report. The engine exits 2 when `ok` is false; that is still a valid report. Failures use stable codes with sanitized messages; raw exception text and engine stderr are logged server-side, never returned:
+
+  | Code | HTTP | Cause |
+  |---|---|---|
+  | `engine_unavailable` | 503 | uv, the engine repo or its virtualenv cannot be started |
+  | `engine_timeout` | 504 | the command exceeded the read timeout; its whole process group is terminated |
+  | `engine_bad_json` | 502 | the output was not the expected JSON |
+  | `engine_*` / engine codes | 502 | the engine exited with an error; its own `error:` line is passed on, redacted |
+  | `internal_error` | 500 | unexpected backend error |
+- The status summary from `/projects` and `/projects/{id}/status` adds an `error_code` with the same codes.
 - Job objects also include `created_at`, `error_message`, `error_code` (a stable UI code such as `llm_failure`, `provider_unavailable`, `engine_conflict`, `human_gate`, `interrupted`), `cancel_requested`, `provider`, `model` and `from_stage`. `GET /jobs/{id}?events=N` includes the last N events.
-- SSE event types: `status`, `log` (`{sequence, stream: stdout|stderr, message, ts}`), `log_truncated`, `cancel_requested`, `completed` (`{status, exit_code, message, error_message, error_code}`). Event ids are the persisted `job_events` row ids. Replay uses `Last-Event-ID` or `?after=`. Keepalive pings run every 15 s.
+- SSE event types: `status`, `log` (`{sequence, stream: stdout|stderr, message, ts}`), `log_truncated`, `cancel_requested`, `completed` (`{status, exit_code, message, error_message, error_code}`). Event ids are the persisted `job_events` row ids. Replay uses `Last-Event-ID` or `?after=`, in pages of 1000 until nothing is left, so a reconnect after any number of missed events is complete. Keepalive pings run every 15 s.
 - `POST /jobs/{id}/cancel` returns `200` with `cancelled` for a queued job, `202` with `cancel_requested: true` for a running job (completion arrives as a `completed` event), and `409 job_finished` for a terminal job.
 - Draft job errors: `409 job_conflict` (with `details.job_id`), `503 ollama_unavailable`, `422 model_not_installed`, and `422 provider_disabled` (fixture provider not enabled).
 - Project creation errors: `409 project_exists`, `409 path_exists` (any existing file or folder, even an empty one), `422 engine_invalid_input` (the engine rejected the input), `503 engine_unavailable`.
