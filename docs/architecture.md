@@ -71,3 +71,13 @@ See `engine-compatibility.md`. CLI interface is an integration boundary; verify 
 - Store logs outside project folders to avoid altering engine-managed artifacts.
 - Use an explicit local origin/token defense, despite no account login.
 - Version the API under `/api/v1` and document any changed contract.
+
+## Implementation notes (M1)
+
+- **Layout:** `backend/app` holds `config`, `db` (+ `migrations/*.sql`), `engine/{commands,runner,errors,service}`, `projects`, `artifacts`, `jobs`, `security` and `api/routes`. `frontend/src` holds `app` routes, `views`, `components` (shared, per `ui-design.md` §5), `hooks/use-job-events` and `lib/{api,status,queries,validation,format}`.
+- **Engine invocation:** `uv run --no-sync --quiet ytagent <allowlisted args>` with `cwd=YTA_ENGINE_REPO`, an env allowlist (`PATH`, `HOME`, locale, `OLLAMA_BASE_URL`, `PYTHONUNBUFFERED=1`) and `start_new_session=True`, so every engine run has its own process group.
+- **Same origin:** the browser only talks to Next.js, which proxies `/api/*` to the backend (`compress: false` so SSE is not buffered). The backend still enforces loopback Host/Origin and a CSRF header itself.
+- **Persistence:** explicit versioned SQL migrations (`schema_version` table), WAL and `busy_timeout`, one backend process. Jobs gained `process_started` (from `ps -o lstart`, a guard against PID reuse during restart reconciliation), `error_code`, `message` and `cancel_requested` beyond the milestone's minimum schema.
+- **Cancellation:** SIGINT first, because the engine handles `KeyboardInterrupt` and exits 130. Then SIGTERM and SIGKILL after grace periods. While the asyncio `Process` object has not been reaped, its PID cannot be reused, so signalling it during the job's lifetime is safe.
+- **Statuses:** the next action shown in the UI is derived only from `production-status` (for example `draft: blocked` → Generate a draft, `draft: needs_review` → Review the draft). When status is unavailable the UI says "Unable to determine".
+- **Fixture provider:** hidden unless `YTA_ALLOW_FIXTURE_PROVIDER=true`, so a real project never gets placeholder text silently.

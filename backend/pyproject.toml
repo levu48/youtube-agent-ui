@@ -1,0 +1,46 @@
+[project]
+name = "youtube-agent-ui-backend"
+version = "0.1.0"
+description = "Local FastAPI backend for youtube-agent-ui (drives the youtube-agent CLI)."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.4,<3",
+    "sse-starlette>=2.1,<4",
+    "httpx>=0.27,<1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+timeout = 120
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "engine: runs the real youtube-agent CLI with the fixture provider (skipped if not found)",
+    "ollama: needs a running Ollama; deselected unless YTA_RUN_OLLAMA=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "ASYNC"]
+ignore = ["S603", "S607", "ASYNC109", "ASYNC230", "ASYNC240"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108"]

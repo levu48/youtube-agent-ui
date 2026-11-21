@@ -1,0 +1,19 @@
+{
+  "project_id": "prj-dfb82a6d784e",
+  "stages": [
+    {
+      "stage": "intake",
+      "mode": null,
+      "status": "completed",
+      "detail": "input.json present",
+      "next_action": null
+    },
+    {
+      "stage": "draft",
+      "mode": null,
+      "status": "blocked",
+      "detail": "G1 editorial: missing",
+      "next_action": "ytagent resume --draft-provider ollama|fixture"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "project_id": "prj-dfb82a6d784e",
+  "stages": [
+    {
+      "stage": "intake",
+      "mode": null,
+      "status": "completed",
+      "detail": "input.json present",
+      "next_action": null
+    },
+    {
+      "stage": "draft",
+      "mode": null,
+      "status": "needs_review",
+      "detail": "G1 editorial: not_approved",
+      "next_action": "read outline.md/script.md, then ytagent draft-approve --reviewer 'Your name'"
+    }
+  ]
+}

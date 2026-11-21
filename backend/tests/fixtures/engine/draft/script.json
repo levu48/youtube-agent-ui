@@ -1,0 +1,116 @@
+{
+  "schema_version": "m3-script-0.1",
+  "kind": "script",
+  "verification": "unverified_draft",
+  "notice": "Editorial draft generated with an LLM. Nothing in it is verified research: every factual statement, date, figure and attribution needs a source before publication.",
+  "generated_by": "fixture:fixture-llm-v1",
+  "title": "Bản nháp: Hồ Chí Minh: Nationalist or Communist?",
+  "language": "vi",
+  "target_duration_seconds": 180,
+  "outline_sha256": "b603f30abe0f43adcc7b82d2fc37ce14863d537d174480229d94d22b94d39c29",
+  "input_sha256": "225cf971a9da9e70ebdceb1f80d69592bad2a81faadcc2a3a096969743324d3e",
+  "sections": [
+    {
+      "outline_section_id": "sec-01",
+      "heading": "Câu hỏi đặt ra",
+      "narration": "Đây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.\n\nMỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+      "summary": "Tóm tắt phần Câu hỏi đặt ra.",
+      "target_duration_seconds": 36.0,
+      "estimated_duration_seconds": 36.5,
+      "spoken_units": 146,
+      "editorial_notes": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Đây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra.",
+          "origin": "model"
+        },
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ]
+    },
+    {
+      "outline_section_id": "sec-02",
+      "heading": "Bối cảnh",
+      "narration": "Kịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.\n\nMỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng. Người biên tập có thể thấy cụm từ “một câu trích dẫn cần được kiểm chứng” ở đây.\n\nSau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.\n\nĐây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến.",
+      "summary": "Tóm tắt phần Bối cảnh.",
+      "target_duration_seconds": 54.0,
+      "estimated_duration_seconds": 56.8,
+      "spoken_units": 227,
+      "editorial_notes": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Kịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến.",
+          "origin": "model"
+        },
+        {
+          "kind": "quotation_needs_verification",
+          "note": "Quoted words: verify the exact wording, speaker and source, or paraphrase without quotation marks.",
+          "excerpt": "“một câu trích dẫn cần được kiểm chứng”",
+          "origin": "rule"
+        },
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ]
+    },
+    {
+      "outline_section_id": "sec-03",
+      "heading": "Luận điểm thứ nhất",
+      "narration": "Mỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng. Người biên tập có thể thấy cụm từ “một câu trích dẫn cần được kiểm chứng” ở đây.\n\nSau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.\n\nĐây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.\n\nMỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu.",
+      "summary": "Tóm tắt phần Luận điểm thứ nhất.",
+      "target_duration_seconds": 54.0,
+      "estimated_duration_seconds": 56.8,
+      "spoken_units": 227,
+      "editorial_notes": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Mỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu.",
+          "origin": "model"
+        },
+        {
+          "kind": "quotation_needs_verification",
+          "note": "Quoted words: verify the exact wording, speaker and source, or paraphrase without quotation marks.",
+          "excerpt": "“một câu trích dẫn cần được kiểm chứng”",
+          "origin": "rule"
+        },
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ]
+    },
+    {
+      "outline_section_id": "sec-04",
+      "heading": "Luận điểm thứ hai",
+      "narration": "Sau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.\n\nĐây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.",
+      "summary": "Tóm tắt phần Luận điểm thứ hai.",
+      "target_duration_seconds": 36.0,
+      "estimated_duration_seconds": 37.0,
+      "spoken_units": 148,
+      "editorial_notes": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Sau đó, lời dẫn quay trở lại câu hỏi trung tâm của video.",
+          "origin": "model"
+        }
+      ]
+    }
+  ]
+}

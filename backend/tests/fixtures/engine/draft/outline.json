@@ -1,0 +1,70 @@
+{
+  "schema_version": "m3-outline-0.1",
+  "kind": "outline",
+  "verification": "unverified_draft",
+  "notice": "Editorial draft generated with an LLM. Nothing in it is verified research: every factual statement, date, figure and attribution needs a source before publication.",
+  "generated_by": "fixture:fixture-llm-v1",
+  "title": "Bản nháp: Hồ Chí Minh: Nationalist or Communist?",
+  "thesis_or_question": "Chủ đề này nên được hiểu như thế nào?",
+  "language": "vi",
+  "target_duration_seconds": 180,
+  "input_sha256": "225cf971a9da9e70ebdceb1f80d69592bad2a81faadcc2a3a096969743324d3e",
+  "sections": [
+    {
+      "id": "sec-01",
+      "role": "opening",
+      "heading": "Câu hỏi đặt ra",
+      "purpose": "Mục đích của phần này.",
+      "key_points": [
+        "Ý chính 1.1",
+        "Ý chính 1.2"
+      ],
+      "claims_to_investigate": [
+        "Mốc thời gian cần kiểm chứng."
+      ],
+      "estimated_duration_seconds": 36.0
+    },
+    {
+      "id": "sec-02",
+      "role": "development",
+      "heading": "Bối cảnh",
+      "purpose": "Mục đích của phần này.",
+      "key_points": [
+        "Ý chính 2.1",
+        "Ý chính 2.2"
+      ],
+      "claims_to_investigate": [
+        "Mốc thời gian cần kiểm chứng."
+      ],
+      "estimated_duration_seconds": 54.0
+    },
+    {
+      "id": "sec-03",
+      "role": "development",
+      "heading": "Luận điểm thứ nhất",
+      "purpose": "Mục đích của phần này.",
+      "key_points": [
+        "Ý chính 3.1",
+        "Ý chính 3.2"
+      ],
+      "claims_to_investigate": [
+        "Mốc thời gian cần kiểm chứng."
+      ],
+      "estimated_duration_seconds": 54.0
+    },
+    {
+      "id": "sec-04",
+      "role": "conclusion",
+      "heading": "Luận điểm thứ hai",
+      "purpose": "Mục đích của phần này.",
+      "key_points": [
+        "Ý chính 4.1",
+        "Ý chính 4.2"
+      ],
+      "claims_to_investigate": [
+        "Mốc thời gian cần kiểm chứng."
+      ],
+      "estimated_duration_seconds": 36.0
+    }
+  ]
+}
