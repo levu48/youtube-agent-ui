@@ -84,3 +84,29 @@ Prefer normalized validated fields while preserving the original structure. Incl
 - Mutations require same-origin/CSRF defense. Restrict CORS and Host to loopback origins.
 - Engine errors should include a stable UI code plus a safely truncated/redacted engine diagnostic.
 - OpenAPI generated from Pydantic schemas is the implementation source of truth once endpoints exist.
+
+---
+
+## Implemented v1 — additions and clarifications (M1)
+
+The endpoints above are implemented. The OpenAPI document generated from the Pydantic schemas (`GET /api/openapi.json`) is now the source of truth. These were added for the UI design (`docs/ui-design.md`):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/session` | Per-process CSRF token. Send it as `X-CSRF-Token` on every POST. |
+| GET | `/system/config` | Display-safe config: projects root (with `~`), default language/model, enabled providers. |
+| GET | `/projects/location-preview?slug=` | Server-derived location for a validated slug, and whether it is free. |
+| GET | `/projects/discoverable` | Unregistered engine projects directly under the projects root. |
+| POST | `/projects/register` | `{ "slug" }`: register one discovered project. |
+| GET | `/projects/{id}/draft-available` | `{ "available": bool }` once `outline.json` and `script.json` are readable. |
+| GET | `/jobs?project_id=&limit=` | Recent jobs, newest first. |
+
+Clarifications:
+- `GET /projects` returns each project plus a `status` summary (`available`, `stages[]`, `current_stage`, `error`) taken from the engine's `production-status --json`. It is cached for up to 20 s and refreshed when a job finishes.
+- `GET /projects/{id}/draft` returns `{available, outline: {state, error, data, markdown}, script: {…}, draft_check, draft_check_error}`, where `state` is `ok | missing | malformed`.
+- `GET /projects/{id}/draft-check` relays the engine report. The engine exits 2 when `ok` is false; that is still a valid report.
+- Job objects also include `created_at`, `error_message`, `error_code` (a stable UI code such as `llm_failure`, `provider_unavailable`, `engine_conflict`, `human_gate`, `interrupted`), `cancel_requested`, `provider`, `model` and `from_stage`. `GET /jobs/{id}?events=N` includes the last N events.
+- SSE event types: `status`, `log` (`{sequence, stream: stdout|stderr, message, ts}`), `log_truncated`, `cancel_requested`, `completed` (`{status, exit_code, message, error_message, error_code}`). Event ids are the persisted `job_events` row ids. Replay uses `Last-Event-ID` or `?after=`. Keepalive pings run every 15 s.
+- `POST /jobs/{id}/cancel` returns `200` with `cancelled` for a queued job, `202` with `cancel_requested: true` for a running job (completion arrives as a `completed` event), and `409 job_finished` for a terminal job.
+- Draft job errors: `409 job_conflict` (with `details.job_id`), `503 ollama_unavailable`, `422 model_not_installed`, and `422 provider_disabled` (fixture provider not enabled).
+- Project creation errors: `409 project_exists`, `409 path_exists` (any existing file or folder, even an empty one), `422 engine_invalid_input` (the engine rejected the input), `503 engine_unavailable`.

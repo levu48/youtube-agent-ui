@@ -40,7 +40,7 @@ function lineTime(e: JobEvent): string {
 export function JobLogViewer({
   events,
   connection,
-  emptyText = "No engine output yet. The engine prints its summary when the draft finishes.",
+  emptyText = "No engine output yet. Lines appear as the engine reports each step.",
 }: {
   events: JobEvent[];
   connection: Connection;
