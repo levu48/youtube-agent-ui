@@ -36,12 +36,35 @@ Every regression test below was also run against the code **before** its fix; th
 
 **Found while fixing:** axe flagged contrast of 4.42–4.43:1 for `#64748B` text on tinted backgrounds: the "Coming later" stage cards and the "Engine suggests" hint. Before, the scans could run before the stage stepper had loaded. Both are fixed, and axe now waits for network idle.
 
-**CI:** `.github/workflows/ci.yml` now has four jobs:
-- `backend` and `frontend`, as before.
+**CI:** `.github/workflows/ci.yml` has four jobs:
+- `backend`: real-engine tests deselected with `-m "not engine"`, so they are not reported as skipped.
+- `frontend`.
 - `e2e`: Playwright against the fake engine, on every run.
-- `engine`: the required real-engine integration tests (`YTA_REQUIRE_ENGINE=1`, so they fail rather than skip) and real-engine Playwright, against `youtube-agent` pinned at `d1325c4`.
+- `engine`: the required real-engine tests.
 
-The engine repo is private, so the `engine` job needs a repository secret named `ENGINE_REPO_TOKEN` with read access. Until it is added, the job posts a notice and runs nothing.
+## Second review: real-engine tests can no longer pass without running
+
+The second review found that the `engine` job reported success when `ENGINE_REPO_TOKEN` was missing, although every real-engine test was skipped. Changes:
+
+- **Fail closed in CI.** The `engine` job now fails with an error annotation when the secret is missing. It checks out the engine at the revision in [`ENGINE_REF`](../ENGINE_REF) and runs `scripts/test-real-engine.sh`.
+- **One script for CI and local runs.** `scripts/test-real-engine.sh` checks that the engine `HEAD` equals `ENGINE_REF`. It then runs the backend integration tests with `YTA_REQUIRE_ENGINE=1`, where a missing engine is a failure rather than a skip, and checks the JUnit report for at least one test, 0 skipped and 0 failures. Finally it runs real-engine Playwright and checks the JSON report: no failures, at least 10 passed, and no skips except the slow-job cancel test, which the `e2e` job covers.
+- **No silent fallback in Playwright.** `e2e/serve.mjs` refuses `E2E_ENGINE=real` when there is no engine checkout with a `.venv`.
+- **Secret documented.** The README's CI section explains how to create a fine-grained token with *Contents: read-only* on `levu48/youtube-agent` and add it as `ENGINE_REPO_TOKEN`.
+
+**Real-engine run at the pinned revision** (local, 2026-11-20). `scripts/test-real-engine.sh` made a read-only clone of `youtube-agent` at `d1325c44ac04e0495f4bc42976d3058cd4d43467` into a temp directory and ran `uv sync --frozen`; it reported `ytagent 0.1.0`.
+
+| Check | Result |
+|---|---|
+| Engine revision guard | `HEAD == ENGINE_REF` (d1325c4) |
+| Backend real-engine integration (`-m engine`, `YTA_REQUIRE_ENGINE=1`) | 3 tests, 0 skipped, 0 failed |
+| Playwright, real engine | 10 passed, 1 skipped (allowed: slow-job cancel), 0 failed |
+
+**The guards were tested by forcing failures:**
+- engine checkout at `HEAD~1` (202a81c): the script exited 1 with `engine at 202a81c…, expected pinned d1325c4…`;
+- `E2E_ENGINE=real` with no engine: `serve.mjs` threw `no engine checkout with .venv`;
+- `YTA_REQUIRE_ENGINE=1` with a missing engine: 3 failures instead of skips.
+
+**Status in GitHub CI:** `ENGINE_REPO_TOKEN` has not been added yet (only the repository owner can create it). Until it is added, the `engine` job **fails on purpose**, and PR #1 shows that job as failing. The real-engine evidence above comes from the identical script run locally.
 
 ## Manual smoke tests with the real engine and Ollama (`qwen3:8b`, Vietnamese)
 
@@ -70,7 +93,7 @@ Run through the dev servers (`./scripts/dev.sh`) with a scratch projects folder:
 ## Known limitations / follow-ups
 
 - **Browser cancel test runs on the fake engine only.** The real fixture provider finishes in about 0.2 s, too fast to cancel. Real-engine cancellation was checked manually with Ollama (above).
-- **Real-engine CI needs a secret.** It runs only once `ENGINE_REPO_TOKEN` is configured, because the engine repository is private.
+- **Real-engine CI needs a secret.** The `engine` job fails until the owner adds `ENGINE_REPO_TOKEN`, because the engine repository is private. See the README.
 - **Status cache.** `GET /projects` caches the engine status per project for 20 s. Changes made from the CLI (for example `draft-approve`) can take up to 20 s to show on the dashboard. The project page always asks the engine afresh.
 - **Single process.** The backend runs one process. A second backend pointed at the same `YTA_DATA_DIR` is not supported.
 - **Restart behaviour.** Jobs that were still queued when the backend restarted are marked `interrupted`, not resumed, by design. Start them again.

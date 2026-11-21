@@ -64,7 +64,33 @@ cd frontend && npx playwright install chromium && E2E_ENGINE=real npm run test:e
 
 None of the automated tests need Ollama, network access or paid services. If the sibling engine checkout is missing, the real-engine tests are skipped and say why. Set `YTA_REQUIRE_ENGINE=1` to make them fail instead. Set `YTA_TEST_ENGINE_REPO`, or `YTA_ENGINE_REPO` for the E2E tests, to point at the engine elsewhere.
 
-**CI** (`.github/workflows/ci.yml`) runs backend lint and tests, frontend lint, types, tests and build, and Playwright against the fake engine. A fourth job runs the required real-engine integration and Playwright tests against a pinned `youtube-agent` revision. It needs a repository secret named `ENGINE_REPO_TOKEN` with read access to the private engine repo; without it the job only posts a notice.
+**CI** (`.github/workflows/ci.yml`) has four jobs:
+- `backend`: lint and unit tests. The real-engine tests are deselected here.
+- `frontend`: lint, types, tests and build.
+- `e2e`: Playwright against the fake engine.
+- `engine`: the **required** real-engine tests.
+
+**Real-engine tests (required).** The pinned engine revision lives in [`ENGINE_REF`](ENGINE_REF). Both CI and you run the same script:
+
+```bash
+scripts/test-real-engine.sh                    # clones ../youtube-agent at ENGINE_REF into a temp dir
+ENGINE_DIR=/path/to/checkout scripts/test-real-engine.sh   # or verify an existing checkout
+```
+
+The script fails in any of these cases:
+- the engine is not at `ENGINE_REF`;
+- any backend integration test is skipped, fails or is missing;
+- real-engine Playwright fails, or skips anything other than the slow-job cancel test, which the fake-engine job covers.
+
+To bump the pinned engine, update `ENGINE_REF`, run the script locally, and record the result in `docs/engine-compatibility.md`.
+
+**Required GitHub secret.** `levu48/youtube-agent` is private, so the `engine` job checks it out with a repository secret named **`ENGINE_REPO_TOKEN`**. Without the secret the job **fails**, so real-engine tests can never pass without running. To create it:
+1. On GitHub, go to *Settings → Developer settings → Fine-grained personal access tokens → Generate new token*.
+2. Set *Repository access* to *Only select repositories* and choose `levu48/youtube-agent`.
+3. Under *Permissions*, set *Repository → Contents* to *Read-only*. No other permissions are needed.
+4. In `levu48/youtube-agent-ui`, go to *Settings → Secrets and variables → Actions → New repository secret* and name it `ENGINE_REPO_TOKEN`. Or run `gh secret set ENGINE_REPO_TOKEN -R levu48/youtube-agent-ui` and paste the token.
+
+The checkout uses `persist-credentials: false`, so the token is not left on the runner. Pull requests from forks don't receive secrets, so the job fails for them by design.
 
 ## How it behaves
 

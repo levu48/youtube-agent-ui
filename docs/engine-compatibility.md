@@ -60,7 +60,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ## Verified findings (2026-11-20)
 
-**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`), Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
+**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision is pinned in [`ENGINE_REF`](../ENGINE_REF) and checked by `scripts/test-real-engine.sh` and CI, Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
 
 **Invocation.** The UI runs `uv run --no-sync ytagent …` with `cwd=YTA_ENGINE_REPO`. `--no-sync` guarantees the UI never re-syncs/modifies the engine's virtualenv. `PYTHONUNBUFFERED=1` is set so output streams line by line.
 

@@ -21,6 +21,10 @@ const engineRepo = process.env.YTA_ENGINE_REPO ?? resolve(frontend, "../../youtu
 const engineMode =
   process.env.E2E_ENGINE ?? (existsSync(join(engineRepo, ".venv")) ? "real" : "fake");
 if (!["real", "fake"].includes(engineMode)) throw new Error(`E2E_ENGINE must be real or fake`);
+if (engineMode === "real" && !existsSync(join(engineRepo, ".venv"))) {
+  // Never fall back silently: a "real" run without the engine must fail.
+  throw new Error(`E2E_ENGINE=real but no engine checkout with .venv at ${engineRepo}`);
+}
 
 const backendEnv = {
   ...process.env,
