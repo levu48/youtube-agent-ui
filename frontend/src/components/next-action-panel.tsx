@@ -32,7 +32,7 @@ export function NextActionPanel({
           </h2>
           <p className="max-w-prose text-sm text-slate-700">{a.description}</p>
           {a.engineHint ? (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-600">
               Engine suggests: <code className="rounded bg-white px-1 py-0.5 break-all">{a.engineHint}</code>
             </p>
           ) : null}

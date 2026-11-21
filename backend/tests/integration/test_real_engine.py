@@ -7,6 +7,7 @@ virtualenv is not available. Set YTA_TEST_ENGINE_REPO to point elsewhere.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -15,10 +16,12 @@ from app.main import create_app
 from tests.conftest import PROJECT, Client, engine_repo, wait_for
 
 REPO = engine_repo()
+# In CI the engine is checked out on purpose: YTA_REQUIRE_ENGINE=1 turns a skip into a failure.
+REQUIRED = os.environ.get("YTA_REQUIRE_ENGINE") == "1"
 pytestmark = [
     pytest.mark.engine,
     pytest.mark.skipif(
-        not (REPO / "pyproject.toml").is_file() or not (REPO / ".venv").is_dir(),
+        not REQUIRED and (not (REPO / "pyproject.toml").is_file() or not (REPO / ".venv").is_dir()),
         reason=f"engine checkout with .venv not found at {REPO}",
     ),
 ]

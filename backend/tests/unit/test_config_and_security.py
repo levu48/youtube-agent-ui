@@ -76,7 +76,7 @@ def test_error_envelope_for_unknown_route(client):
 
 
 def test_engine_info_and_config(client):
-    assert client.get("/api/v1/system/engine").json()["version"] == "9.9.9-fake"
+    assert client.get("/api/v1/system/engine").json()["version"] == "0.1.0+fake"
     cfg = client.get("/api/v1/system/config").json()
     assert cfg["providers"] == ["ollama", "fixture"]
     ollama = client.get("/api/v1/system/ollama").json()

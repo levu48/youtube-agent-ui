@@ -40,7 +40,7 @@ export function ProjectStageStepper({ status }: { status: StatusSummary | undefi
         {future.map((f) => (
           <li
             key={f}
-            className="flex min-w-28 flex-1 flex-col gap-1.5 rounded-lg border border-dashed bg-surface-muted/50 p-3 text-muted-foreground"
+            className="flex min-w-28 flex-1 flex-col gap-1.5 rounded-lg border border-dashed bg-surface-muted/50 p-3 text-slate-600"
           >
             <span className="text-xs">Coming later</span>
             <span className="font-medium">{stageName(f)}</span>

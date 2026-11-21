@@ -1,0 +1,217 @@
+{
+  "schema_version": "m3-storyboard-draft-0.1",
+  "kind": "storyboard_draft",
+  "verification": "unverified_draft",
+  "notice": "Editorial draft generated with an LLM. Nothing in it is verified research: every factual statement, date, figure and attribution needs a source before publication.",
+  "generated_by": "fixture:fixture-llm-v1",
+  "title": "Bản nháp: Hồ Chí Minh: Nationalist or Communist?",
+  "language": "vi",
+  "target_duration_seconds": 180,
+  "outline_sha256": "b603f30abe0f43adcc7b82d2fc37ce14863d537d174480229d94d22b94d39c29",
+  "script_sha256": "4b9940412824d2fd71c6d608eddb391e2ff84759ddfcec4dd5c191ca57d09c86",
+  "scenes": [
+    {
+      "id": "scene-001",
+      "outline_section_id": "sec-01",
+      "narration": "Đây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.",
+      "estimated_duration_seconds": 25.8,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 1.",
+        "suggested_kind": "illustration",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Generated illustration: label it on screen as an illustration or reconstruction. It must not imitate a real photograph or document."
+      },
+      "claim_ids": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Đây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra.",
+          "origin": "model"
+        }
+      ],
+      "shots": []
+    },
+    {
+      "id": "scene-002",
+      "outline_section_id": "sec-01",
+      "narration": "Mỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+      "estimated_duration_seconds": 10.8,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 2.",
+        "suggested_kind": "document",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Must be an image of the real document with a verified source and licence. Never generate or mock up documents, letters or quotations."
+      },
+      "claim_ids": [],
+      "review_flags": [
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ],
+      "shots": []
+    },
+    {
+      "id": "scene-003",
+      "outline_section_id": "sec-02",
+      "narration": "Kịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.\n\nMỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng. Người biên tập có thể thấy cụm từ “một câu trích dẫn cần được kiểm chứng” ở đây.",
+      "estimated_duration_seconds": 28.5,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 1.",
+        "suggested_kind": "generic",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": null
+      },
+      "claim_ids": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Kịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến.",
+          "origin": "model"
+        },
+        {
+          "kind": "quotation_needs_verification",
+          "note": "Quoted words: verify the exact wording, speaker and source, or paraphrase without quotation marks.",
+          "excerpt": "“một câu trích dẫn cần được kiểm chứng”",
+          "origin": "rule"
+        },
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ],
+      "shots": []
+    },
+    {
+      "id": "scene-004",
+      "outline_section_id": "sec-02",
+      "narration": "Sau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.\n\nĐây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến.",
+      "estimated_duration_seconds": 28.2,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 2.",
+        "suggested_kind": "document",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Must be an image of the real document with a verified source and licence. Never generate or mock up documents, letters or quotations."
+      },
+      "claim_ids": [],
+      "review_flags": [],
+      "shots": []
+    },
+    {
+      "id": "scene-005",
+      "outline_section_id": "sec-03",
+      "narration": "Mỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu. Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng. Người biên tập có thể thấy cụm từ “một câu trích dẫn cần được kiểm chứng” ở đây.\n\nSau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.",
+      "estimated_duration_seconds": 26.5,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 1.",
+        "suggested_kind": "illustration",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Generated illustration: label it on screen as an illustration or reconstruction. It must not imitate a real photograph or document."
+      },
+      "claim_ids": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Mỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu.",
+          "origin": "model"
+        },
+        {
+          "kind": "quotation_needs_verification",
+          "note": "Quoted words: verify the exact wording, speaker and source, or paraphrase without quotation marks.",
+          "excerpt": "“một câu trích dẫn cần được kiểm chứng”",
+          "origin": "rule"
+        },
+        {
+          "kind": "source_needed",
+          "note": "Contains a specific date or number; confirm it against a source.",
+          "excerpt": "Năm 1945 là một mốc giả định cho thấy chỗ cần kiểm chứng một sự kiện có ngày tháng.",
+          "origin": "rule"
+        }
+      ],
+      "shots": []
+    },
+    {
+      "id": "scene-006",
+      "outline_section_id": "sec-03",
+      "narration": "Đây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.\n\nKịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.\n\nMỗi mốc thời gian hay con số cụ thể vẫn cần được đối chiếu với nguồn tư liệu.",
+      "estimated_duration_seconds": 30.2,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 2.",
+        "suggested_kind": "illustration",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Generated illustration: label it on screen as an illustration or reconstruction. It must not imitate a real photograph or document."
+      },
+      "claim_ids": [],
+      "review_flags": [],
+      "shots": []
+    },
+    {
+      "id": "scene-007",
+      "outline_section_id": "sec-04",
+      "narration": "Sau đó, lời dẫn quay trở lại câu hỏi trung tâm của video. Bối cảnh giúp người xem hiểu vì sao câu hỏi này vẫn còn ý nghĩa hôm nay. Phần này khép lại bằng việc chuẩn bị cho phần tiếp theo của câu chuyện.\n\nĐây là lời dẫn tạm thời do nhà cung cấp thử nghiệm ngoại tuyến tạo ra. Nó thay thế cho bản nháp thật để kiểm tra quy trình mà không cần mô hình. Một kịch bản thật sẽ giải thích bối cảnh của chủ đề bằng ngôn ngữ dễ hiểu.",
+      "estimated_duration_seconds": 23.8,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 1.",
+        "suggested_kind": "chart",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Chart values must come from verified sources (research, Milestone 5)."
+      },
+      "claim_ids": [],
+      "review_flags": [
+        {
+          "kind": "interpretation",
+          "note": "Diễn giải cần được cân nhắc.",
+          "excerpt": "Sau đó, lời dẫn quay trở lại câu hỏi trung tâm của video.",
+          "origin": "model"
+        }
+      ],
+      "shots": []
+    },
+    {
+      "id": "scene-008",
+      "outline_section_id": "sec-04",
+      "narration": "Kịch bản cần tách bạch sự thật đã được xác lập với cách diễn giải và ý kiến. Các nhà sử học thường cân nhắc nhiều cách giải thích dựa trên bằng chứng hiện có. Khi các nguồn không thống nhất, lời dẫn nên nói rõ điều đó thay vì chọn một phía.",
+      "estimated_duration_seconds": 13.2,
+      "visual_brief": {
+        "description": "Hình minh hoạ tạm cho cảnh 2.",
+        "suggested_kind": "illustration",
+        "search_keywords": [
+          "placeholder",
+          "test"
+        ],
+        "authenticity_note": "Generated illustration: label it on screen as an illustration or reconstruction. It must not imitate a real photograph or document."
+      },
+      "claim_ids": [],
+      "review_flags": [],
+      "shots": []
+    }
+  ]
+}

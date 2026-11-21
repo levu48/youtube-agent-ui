@@ -50,7 +50,7 @@ export function RecentJobs({
                 key={j.id}
                 className={cn(
                   "flex flex-wrap items-center justify-between gap-2 py-2.5",
-                  selectedId === j.id && "bg-surface-muted/60 -mx-2 rounded-md px-2",
+                  selectedId === j.id && "-ml-3 border-l-4 border-l-primary pl-2",
                 )}
               >
                 <div className="min-w-0 space-y-0.5">

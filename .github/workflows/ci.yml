@@ -8,6 +8,7 @@ on:
 permissions:
   contents: read
 
+# Everything here is offline: no Ollama, no network services, no paid providers.
 jobs:
   backend:
     runs-on: macos-latest
@@ -20,8 +21,8 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      # Unit tests use a fake engine; real-engine integration tests skip (with a reason)
-      # when the separate youtube-agent checkout is not available.
+      # Unit tests use the fake engine. Real-engine integration tests skip here (with a
+      # reason) and run, required, in the "engine" job below.
       - run: uv run pytest -q
 
   frontend:
@@ -43,3 +44,100 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # Playwright against the backend wired to backend/tests/fake_engine.py, which replays
+  # output captured from the real engine. Runs without access to the private engine repo
+  # and also covers browser cancellation (fake slow jobs).
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_ENGINE: fake
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npx playwright test
+        working-directory: frontend
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-fake-engine
+          path: frontend/test-results
+          retention-days: 7
+
+  # Real youtube-agent CLI (offline fixture provider) at a pinned revision. The engine repo
+  # is private: add a read-only token as the ENGINE_REPO_TOKEN repository secret to enable
+  # this job. Without it the job reports a notice and does nothing.
+  engine:
+    runs-on: ubuntu-latest
+    env:
+      ENGINE_TOKEN: ${{ secrets.ENGINE_REPO_TOKEN }}
+      ENGINE_REF: d1325c44ac04e0495f4bc42976d3058cd4d43467 # docs/engine-compatibility.md
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_ENGINE: real
+      YTA_REQUIRE_ENGINE: "1"
+    steps:
+      - name: Check engine access
+        id: access
+        run: |
+          if [ -z "$ENGINE_TOKEN" ]; then
+            echo "::notice title=Real-engine tests not run::Add an ENGINE_REPO_TOKEN secret (read access to levu48/youtube-agent) to run offline real-engine integration and E2E tests."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Sibling checkouts, matching the documented local layout.
+      - if: steps.access.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          path: youtube-agent-ui
+      - if: steps.access.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: levu48/youtube-agent
+          ref: ${{ env.ENGINE_REF }}
+          token: ${{ secrets.ENGINE_REPO_TOKEN }}
+          path: youtube-agent
+          persist-credentials: false
+      - if: steps.access.outputs.enabled == 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: steps.access.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: youtube-agent-ui/frontend/package-lock.json
+      - if: steps.access.outputs.enabled == 'true'
+        name: Prepare engine virtualenv
+        run: uv sync --frozen
+        working-directory: youtube-agent
+      - if: steps.access.outputs.enabled == 'true'
+        name: Real-engine integration tests (required, fixture provider)
+        run: |
+          uv sync --frozen
+          uv run pytest -q tests/integration
+        working-directory: youtube-agent-ui/backend
+      - if: steps.access.outputs.enabled == 'true'
+        name: Playwright against the real engine
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test
+        working-directory: youtube-agent-ui/frontend
+      - if: failure() && steps.access.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-real-engine
+          path: youtube-agent-ui/frontend/test-results
+          retention-days: 7

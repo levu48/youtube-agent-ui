@@ -90,4 +90,5 @@ def test_draft_endpoint(client):
     wait_for(lambda: client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded")
     full = client.get("/api/v1/projects/hcm-demo/draft").json()
     assert full["available"] and full["draft_check"]["ok"]
-    assert full["script"]["data"]["sections"][0]["narration"] == "Xin chào."
+    assert full["script"]["data"]["sections"][0]["heading"] == "Câu hỏi đặt ra"
+    assert full["draft_check"]["approval_status"] == "not_approved"

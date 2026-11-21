@@ -2,8 +2,12 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 const IDEA = "Hồ Chí Minh: Nationalist or Communist?";
+// Mirrors e2e/serve.mjs: "fake" replays captured engine output and supports slow jobs.
+const ENGINE = process.env.E2E_ENGINE ?? "auto";
 
 async function axe(page: Page) {
+  // Let data-dependent UI render first so the scan is deterministic.
+  await page.waitForLoadState("networkidle");
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(
@@ -24,7 +28,7 @@ test("dashboard empty state and health", async ({ page }) => {
   await expect(page.getByText("No projects yet")).toBeVisible();
   await expect(page.getByRole("link", { name: "Create your first project" })).toBeVisible();
   // Engine is real and available; Ollama is deliberately unreachable in E2E.
-  await expect(page.getByText(/Local · 0\./).first()).toBeVisible();
+  await expect(page.getByText(/Local · 0\.\d/).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /Ollama.*show details/ })).toContainText("Unavailable");
   // Future modules are visible but not links.
   const nav = page.getByRole("navigation", { name: "Main" }).first();
@@ -130,6 +134,37 @@ test("unknown project and missing draft states", async ({ page }) => {
   await page.goto("/projects/empty-one/draft");
   await expect(page.getByText("No draft yet")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to Project" }).first()).toBeVisible();
+});
+
+test("cancel a running job: confirmation, then outcome confirmed by the backend", async ({ page }) => {
+  test.skip(ENGINE !== "fake", "needs the fake engine's slow mode (real fixture drafts finish in ~0.2 s)");
+  await page.goto("/projects/new");
+  await page.getByLabel(/Documentary topic/).fill("Slow job for cancel test [slow]");
+  await page.getByLabel(/Project slug/).fill("slow-cancel");
+  await page.getByRole("button", { name: "Create Project" }).click();
+  await page.waitForURL(/slow-cancel$/);
+  await page.getByLabel(/Offline fixture/).check();
+  await page.locator("#generate-draft").getByRole("button", { name: /Generate Draft/ }).click();
+  const log = page.getByRole("log");
+  await expect(log).toContainText("working", { timeout: 15_000 });
+  await expect(page.getByText("Job status: Running").first()).toBeAttached();
+
+  const cancel = page.getByRole("button", { name: "Cancel job" });
+  await cancel.click();
+  const dialog = page.getByRole("dialog", { name: "Stop this draft generation?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep running" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(cancel).toBeFocused(); // focus restored to the opener
+
+  await cancel.click();
+  await page.getByRole("dialog").getByRole("button", { name: "Stop generation" }).click();
+  await expect(page.getByText("Job status: Cancelled").first()).toBeAttached({ timeout: 20_000 });
+  await expect(log).toContainText("cancelled (exit 130)");
+  await expect(page.getByRole("button", { name: /Cancel job|Cancelling/ })).toHaveCount(0);
+  // Refresh: the outcome comes from the backend, not browser state.
+  await page.reload();
+  await expect(page.getByText("Job status: Cancelled").first()).toBeAttached();
 });
 
 for (const [name, width, height] of [
