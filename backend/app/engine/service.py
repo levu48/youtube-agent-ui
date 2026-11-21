@@ -1,0 +1,103 @@
+"""Typed engine operations used by the API (read-only commands + create)."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from typing import Any
+
+from app.config import home_relative
+from app.engine import commands
+from app.engine.runner import EngineCLI, EngineResult, EngineUnavailable
+from app.schemas import EngineInfo, StageOut, StatusSummary
+
+CAPABILITIES = ["create", "draft", "production-status", "draft-check"]
+_STATUS_TTL = 20.0
+
+
+class EngineService:
+    def __init__(self, cli: EngineCLI, *, read_timeout: float = 60.0) -> None:
+        self.cli = cli
+        self.read_timeout = read_timeout
+        self._status_cache: dict[str, tuple[float, StatusSummary]] = {}
+        self._sem = asyncio.Semaphore(4)
+
+    async def info(self) -> EngineInfo:
+        repo = home_relative(self.cli.cwd)
+        try:
+            res = await self.cli.run(commands.version_args(), timeout=self.read_timeout)
+        except EngineUnavailable as exc:
+            return EngineInfo(available=False, repo=repo, reason=str(exc))
+        if not res.ok:
+            return EngineInfo(
+                available=False,
+                repo=repo,
+                reason=f"`ytagent --version` failed: {res.message}. {res.diagnostic()[:500]}",
+            )
+        version = res.stdout.strip().removeprefix("ytagent").strip() or res.stdout.strip()
+        return EngineInfo(available=True, version=version, repo=repo, capabilities=CAPABILITIES)
+
+    async def create(self, root: Path, spec: commands.CreateSpec) -> EngineResult:
+        return await self.cli.run(commands.create_args(root, spec), timeout=self.read_timeout)
+
+    async def _json(self, args: list[str], ok_codes: tuple[int, ...] = (0,)) -> Any:
+        async with self._sem:
+            res = await self.cli.run(args, timeout=self.read_timeout)
+        if res.timed_out:
+            raise EngineReadError("engine_timeout", "The engine did not answer in time.")
+        if res.exit_code not in ok_codes:
+            raise EngineReadError(res.classification.code, res.message, res.diagnostic())
+        try:
+            return res.json()
+        except ValueError:
+            raise EngineReadError(
+                "engine_bad_json", "The engine returned malformed JSON.", res.diagnostic()
+            ) from None
+
+    async def production_status(self, project_id: str, root: Path) -> StatusSummary:
+        try:
+            data = await self._json(commands.production_status_args(root))
+            stages = [StageOut.model_validate(s) for s in data.get("stages", [])]
+        except EngineUnavailable as exc:
+            summary = StatusSummary(available=False, error=str(exc))
+        except EngineReadError as exc:
+            summary = StatusSummary(available=False, error=exc.message)
+        except (AttributeError, TypeError, ValueError):
+            summary = StatusSummary(available=False, error="Unrecognised status format.")
+        else:
+            summary = StatusSummary(available=True, stages=stages, current_stage=_current(stages))
+        self._status_cache[project_id] = (time.monotonic(), summary)
+        return summary
+
+    async def cached_status(self, project_id: str, root: Path) -> StatusSummary:
+        hit = self._status_cache.get(project_id)
+        if hit and time.monotonic() - hit[0] < _STATUS_TTL:
+            return hit[1]
+        return await self.production_status(project_id, root)
+
+    def invalidate(self, project_id: str) -> None:
+        self._status_cache.pop(project_id, None)
+
+    async def draft_check(self, root: Path) -> dict[str, Any]:
+        # draft-check exits 2 when the report is not ok; the JSON is still the report.
+        data = await self._json(commands.draft_check_args(root), ok_codes=(0, 2))
+        if not isinstance(data, dict) or "ok" not in data:
+            raise EngineReadError("engine_bad_json", "Unrecognised draft-check report.")
+        return data
+
+
+class EngineReadError(RuntimeError):
+    def __init__(self, code: str, message: str, diagnostic: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.diagnostic = diagnostic
+
+
+def _current(stages: list[StageOut]) -> StageOut | None:
+    """The first stage that is not completed, as reported by the engine."""
+    for s in stages:
+        if s.status != "completed":
+            return s
+    return stages[-1] if stages else None
