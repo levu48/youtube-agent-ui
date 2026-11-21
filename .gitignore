@@ -17,3 +17,5 @@ frontend/next-env.d.ts
 .env.local
 *.sqlite3*
 .DS_Store
+frontend/.next-e2e/
+frontend/coverage/
