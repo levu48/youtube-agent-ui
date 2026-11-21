@@ -175,7 +175,7 @@ function DraftBody({
               <DraftContent script={script!} />
             )}
           </div>
-          <DraftValidationPanel check={d.draft_check} error={d.draft_check_error} />
+          <DraftValidationPanel check={d.draft_check} error={d.draft_check_error?.message} />
         </div>
       </div>
     </div>

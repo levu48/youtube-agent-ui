@@ -7,9 +7,22 @@ import { api, isTerminal, type JobEvent, type JobStatus } from "@/lib/api";
 export type Connection = "idle" | "connecting" | "live" | "reconnecting" | "polling" | "closed";
 
 const EVENT_TYPES = ["status", "log", "log_truncated", "cancel_requested", "completed"] as const;
-const MAX_EVENTS = 5000;
+/**
+ * Client-side display retention. The backend persists at most 5,000 log events per job plus
+ * a handful of lifecycle events, so this cap does not drop events in practice; it only
+ * bounds memory if that limit ever changes. Event *delivery* is always complete (cursor
+ * paging and SSE replay); retention is a separate, display-only concern.
+ */
+export const MAX_EVENTS = 6000;
 const POLL_MS = 2000;
 const MAX_SSE_ERRORS = 3;
+const PAGE = 1000;
+
+export interface CompletionInfo {
+  /** true when the job finished while this view was watching; false if already terminal. */
+  live: boolean;
+  status: JobStatus;
+}
 
 export interface JobEventsState {
   events: JobEvent[];
@@ -20,7 +33,7 @@ export interface JobEventsState {
   error: string | null;
 }
 
-function merge(prev: JobEvent[], incoming: JobEvent[]): JobEvent[] {
+export function mergeEvents(prev: JobEvent[], incoming: JobEvent[]): JobEvent[] {
   if (incoming.length === 0) return prev;
   const byId = new Map(prev.map((e) => [e.id, e]));
   for (const e of incoming) byId.set(e.id, e);
@@ -40,12 +53,20 @@ function derive(events: JobEvent[]) {
 }
 
 /**
- * Subscribe to a job's persisted events: seed from `GET /jobs/{id}`, then SSE from the
- * last seen id. The browser resumes with Last-Event-ID; after repeated failures we fall
- * back to polling. Disconnects never reset the displayed status.
+ * Subscribe to a job's persisted events without gaps:
+ *  1. seed by paging `GET /jobs/{id}/events/page?after=<cursor>` until `has_more` is false;
+ *  2. stream SSE from the last seen id (the browser resumes with Last-Event-ID);
+ *  3. after repeated SSE failures, poll the same cursor endpoint (all pages each time).
+ * Events are merged by id, so order is preserved and duplicates are dropped.
+ *
+ * `onCompleted` is called exactly once per mount when the job is terminal, whether it was
+ * already terminal at load (`live: false`) or finished while watching (`live: true`).
  * Mount one instance per job (e.g. `key={jobId}`) so state starts fresh.
  */
-export function useJobEvents(jobId: string | null, onCompleted?: () => void): JobEventsState {
+export function useJobEvents(
+  jobId: string | null,
+  onCompleted?: (info: CompletionInfo) => void,
+): JobEventsState {
   const [events, setEvents] = useState<JobEvent[]>([]);
   const [connection, setConnection] = useState<Connection>(jobId ? "connecting" : "idle");
   const [error, setError] = useState<string | null>(null);
@@ -59,36 +80,59 @@ export function useJobEvents(jobId: string | null, onCompleted?: () => void): Jo
     let cancelled = false;
     let es: EventSource | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastId = 0;
+    let cursor = 0;
     let finished = false;
+    let sawCompleted = false;
+    let watchedLive = false;
     let sseErrors = 0;
 
     const add = (batch: JobEvent[]) => {
       if (batch.length === 0) return;
-      lastId = Math.max(lastId, ...batch.map((e) => e.id));
-      setEvents((prev) => merge(prev, batch));
+      for (const e of batch) {
+        cursor = Math.max(cursor, e.id);
+        if (e.type === "completed") sawCompleted = true;
+      }
+      setEvents((prev) => mergeEvents(prev, batch));
     };
-    const finish = () => {
-      if (finished) return;
+
+    const finish = (status: JobStatus) => {
+      if (finished || cancelled) return;
       finished = true;
       es?.close();
+      es = null;
       if (pollTimer) clearTimeout(pollTimer);
       setConnection("closed");
-      completedRef.current?.();
+      completedRef.current?.({ live: watchedLive, status });
+    };
+
+    /** Fetch every event after the cursor (all pages). Returns the job status. */
+    const catchUp = async (): Promise<JobStatus> => {
+      for (;;) {
+        const page = await api.eventsPage(jobId, cursor, PAGE);
+        if (cancelled) return page.status;
+        add(page.events);
+        if (!page.has_more) return page.status;
+      }
+    };
+
+    /** Terminal status is committed just before the final "completed" event: read once more. */
+    const settleIfTerminal = async (status: JobStatus): Promise<boolean> => {
+      if (!isTerminal(status)) return false;
+      if (!sawCompleted) await catchUp();
+      finish(status);
+      return true;
     };
 
     const poll = async () => {
       if (cancelled || finished) return;
       try {
-        const job = await api.job(jobId, 1000);
-        if (cancelled) return;
-        add(job.events.filter((e) => e.id > lastId));
+        const status = await catchUp();
         setError(null);
-        if (isTerminal(job.status)) return finish();
+        if (await settleIfTerminal(status)) return;
       } catch (e) {
         setError(e instanceof Error ? e.message : "Cannot reach the backend.");
       }
-      pollTimer = setTimeout(poll, POLL_MS);
+      if (!cancelled && !finished) pollTimer = setTimeout(poll, POLL_MS);
     };
 
     const startPolling = () => {
@@ -100,8 +144,7 @@ export function useJobEvents(jobId: string | null, onCompleted?: () => void): Jo
 
     const openStream = () => {
       if (typeof EventSource === "undefined") return startPolling();
-      setConnection((c) => (c === "idle" ? "connecting" : c));
-      es = new EventSource(api.eventsUrl(jobId, lastId));
+      es = new EventSource(api.eventsUrl(jobId, cursor));
       es.onopen = () => {
         sseErrors = 0;
         setError(null);
@@ -125,28 +168,25 @@ export function useJobEvents(jobId: string | null, onCompleted?: () => void): Jo
           const id = Number(msg.lastEventId);
           if (!Number.isFinite(id)) return;
           add([{ id, type, data, created_at: String(data.created_at ?? "") }]);
-          if (type === "completed") finish();
+          if (type === "completed") finish(String(data.status ?? "succeeded") as JobStatus);
         });
       }
     };
 
-    api
-      .job(jobId, 1000)
-      .then((job) => {
+    (async () => {
+      try {
+        const status = await catchUp();
         if (cancelled) return;
-        add(job.events);
-        if (isTerminal(job.status)) {
-          finished = true;
-          setConnection("closed");
-          return;
-        }
+        if (await settleIfTerminal(status)) return;
+        watchedLive = true;
         openStream();
-      })
-      .catch((e) => {
+      } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : "Cannot load the job.");
+        watchedLive = true;
         startPolling();
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;

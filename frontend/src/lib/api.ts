@@ -32,6 +32,7 @@ export interface StatusSummary {
   stages: Stage[];
   current_stage: Stage | null;
   error: string | null;
+  error_code?: string | null;
 }
 
 export interface Job {
@@ -57,6 +58,19 @@ export interface JobEvent {
   type: string;
   data: Record<string, unknown>;
   created_at: string;
+}
+
+export interface JobEventPage {
+  job_id: string;
+  status: JobStatus;
+  events: JobEvent[];
+  next_after: number;
+  has_more: boolean;
+}
+
+export interface PublicError {
+  code: string;
+  message: string;
 }
 
 export interface JobDetail extends Job {
@@ -221,7 +235,7 @@ export interface DraftView {
   outline: ArtifactView<Outline>;
   script: ArtifactView<Script>;
   draft_check: DraftCheck | null;
-  draft_check_error: string | null;
+  draft_check_error: PublicError | null;
 }
 
 export class ApiError extends Error {
@@ -340,6 +354,8 @@ export const api = {
   },
   job: (id: string, events = 500) =>
     request<JobDetail>(`/jobs/${encodeURIComponent(id)}?events=${events}`),
+  eventsPage: (id: string, after: number, limit = 1000) =>
+    request<JobEventPage>(`/jobs/${encodeURIComponent(id)}/events/page?after=${after}&limit=${limit}`),
   cancelJob: (id: string) => post<Job>(`/jobs/${encodeURIComponent(id)}/cancel`),
   eventsUrl: (id: string, after: number) =>
     `${BASE}/jobs/${encodeURIComponent(id)}/events?after=${after}`,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Square } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { ErrorState } from "@/components/states";
 import { JobStatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useJobEvents } from "@/hooks/use-job-events";
+import { useJobEvents, type CompletionInfo } from "@/hooks/use-job-events";
 import { ApiError, api, isTerminal, type Job, type JobStatus } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { qk } from "@/lib/queries";
@@ -62,20 +62,33 @@ export function JobActions({
   );
 }
 
+/** Refetch the job and invalidate every query derived from its project. */
+export async function refreshAfterJob(qc: QueryClient, jobId: string) {
+  const job = await qc.fetchQuery({ queryKey: qk.job(jobId), queryFn: () => api.job(jobId, 1), staleTime: 0 });
+  await Promise.all([
+    qc.invalidateQueries({ queryKey: qk.project(job.project_id) }),
+    qc.invalidateQueries({ queryKey: ["jobs"] }),
+    qc.invalidateQueries({ queryKey: qk.projects }),
+  ]);
+  return job;
+}
+
 /** Status, real logs and actions for one job; survives refresh (state comes from the API). */
 export function JobCard({ jobId, title = "Draft job" }: { jobId: string; title?: string }) {
   const qc = useQueryClient();
   const jobQ = useQuery({ queryKey: qk.job(jobId), queryFn: () => api.job(jobId, 1) });
   const [announcement, setAnnouncement] = useState("");
 
-  const onCompleted = useCallback(async () => {
-    const job = await qc.fetchQuery({ queryKey: qk.job(jobId), queryFn: () => api.job(jobId, 1) });
-    setAnnouncement(`Draft job ${JOB_STATUS[job.status].label.toLowerCase()}.`);
-    const pid = job.project_id;
-    void qc.invalidateQueries({ queryKey: qk.project(pid) });
-    void qc.invalidateQueries({ queryKey: ["jobs"] });
-    void qc.invalidateQueries({ queryKey: qk.projects });
-  }, [jobId, qc]);
+  // One idempotent handler for both "already finished at load" and "finished while
+  // watching": refresh everything derived from the job (project status, draft availability,
+  // job lists). Only a completion observed live is announced to screen readers.
+  const onCompleted = useCallback(
+    async (info: CompletionInfo) => {
+      const job = await refreshAfterJob(qc, jobId);
+      if (info.live) setAnnouncement(`Draft job ${JOB_STATUS[job.status].label.toLowerCase()}.`);
+    },
+    [jobId, qc],
+  );
 
   const live = useJobEvents(jobId, onCompleted);
   const job = jobQ.data;
