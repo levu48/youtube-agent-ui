@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusSummary } from "@/lib/api";
 import { formatDuration, slugify } from "@/lib/format";
-import { JOB_STATUS, nextAction, stagePresentation, stageSummary } from "@/lib/status";
+import { JOB_STATUS, approvalPresentation, nextAction, stagePresentation, stageSummary } from "@/lib/status";
 import { minutesToSeconds, validateCreate, type CreateFormValues } from "@/lib/validation";
 
 const base: CreateFormValues = {
@@ -66,6 +66,27 @@ describe("status presentation", () => {
     expect(nextAction(s("needs_review"), null).kind).toBe("review_draft");
     expect(nextAction(s("needs_review"), { status: "running" }).kind).toBe("wait_for_job");
     expect(nextAction(s("needs_review"), null).engineHint).toBe("hint");
+  });
+  it("uses the engine's G1 detail for invalid drafts and stale approvals", () => {
+    const s = (status: string, detail: string): StatusSummary => ({
+      available: true,
+      stages: [],
+      current_stage: { stage: "draft", status, mode: null, detail, next_action: null },
+      error: null,
+    });
+    expect(nextAction(s("blocked", "G1 editorial: missing"), null).kind).toBe("generate_draft");
+    expect(nextAction(s("blocked", "G1 editorial: invalid"), null).kind).toBe("fix_draft");
+    const stale = nextAction(s("needs_review", "G1 editorial: stale"), null);
+    expect(stale.kind).toBe("review_draft");
+    expect(stale.title).toBe("Review the draft again");
+    expect(nextAction(s("needs_review", "G1 editorial: not_approved"), null).title).toBe("Review the draft");
+  });
+  it("labels engine approval states without inventing them", () => {
+    expect(approvalPresentation("approved").label).toBe("G1 approved");
+    expect(approvalPresentation("stale").label).toBe("G1 approval out of date");
+    expect(approvalPresentation("not_approved").label).toBe("G1 not approved");
+    expect(approvalPresentation("something_new").label).toBe("G1 Something new");
+    expect(approvalPresentation(null).label).toBe("G1 status unknown");
   });
 });
 

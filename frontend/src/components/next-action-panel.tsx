@@ -37,10 +37,10 @@ export function NextActionPanel({
             </p>
           ) : null}
         </div>
-        {a.kind === "review_draft" && draftAvailable ? (
+        {(a.kind === "review_draft" || a.kind === "fix_draft") && draftAvailable ? (
           <Button asChild size="lg">
             <Link href={`/projects/${encodeURIComponent(projectId)}/draft`}>
-              View Draft <ArrowRight aria-hidden />
+              {a.kind === "review_draft" ? "Review & Approve" : "View Draft"} <ArrowRight aria-hidden />
             </Link>
           </Button>
         ) : a.kind === "generate_draft" ? (

@@ -57,17 +57,17 @@ export function DraftValidationPanel({ check, error }: { check: DraftCheck | nul
           <List title="Errors" items={check.errors} icon={XCircle} tone="text-danger" />
           <List title="Warnings" items={check.warnings} icon={AlertTriangle} tone="text-warning" />
           <List title="Needs human review" items={check.review_blockers} icon={ShieldAlert} tone="text-warning" />
-          <div className="space-y-1.5">
-            <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-              <UserCheck aria-hidden className="size-4" /> Editorial approval (G1)
-            </h3>
-            <p className="text-sm">
-              Engine reports: <strong>{humanize(check.approval_status)}</strong>.{" "}
-              {check.approval_status !== "approved"
-                ? "Approval is recorded with the engine CLI (draft-approve); this viewer is read-only."
-                : null}
-            </p>
-          </div>
+          <p className="flex items-center gap-1.5 text-sm">
+            <UserCheck aria-hidden className="size-4" />
+            G1 approval, as reported by the engine: <strong>{humanize(check.approval_status)}</strong>
+            {check.approval_status === "stale" && check.approval_changed?.length
+              ? ` (changed since approval: ${check.approval_changed.join(", ")})`
+              : ""}
+            .
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Passing checks is not approval: approval is a separate, named decision below.
+          </p>
           {check.timing ? (
             <p className="text-sm text-muted-foreground">
               Estimated narration {formatClock(check.timing.estimated_seconds)} for a{" "}

@@ -48,6 +48,18 @@ const STAGE_STATUS: Record<string, Presentation> = {
   approved: { label: "Approved", tone: "success", icon: CheckCircle2 },
 };
 
+/** G1 approval as reported by the engine's draft-check `approval_status`. */
+export const APPROVAL_STATUS: Record<string, Presentation> = {
+  approved: { label: "G1 approved", tone: "success", icon: CheckCircle2 },
+  stale: { label: "G1 approval out of date", tone: "warning", icon: AlertTriangle },
+  not_approved: { label: "G1 not approved", tone: "neutral", icon: CircleDashed },
+};
+
+export function approvalPresentation(status: string | null | undefined): Presentation {
+  if (!status) return { label: "G1 status unknown", tone: "neutral", icon: CircleDashed };
+  return APPROVAL_STATUS[status] ?? { label: `G1 ${humanize(status)}`, tone: "neutral", icon: CircleDashed };
+}
+
 const STAGE_NAMES: Record<string, string> = {
   intake: "Intake",
   draft: "Draft",
@@ -90,6 +102,7 @@ export const TONE_CLASSES: Record<Tone, string> = {
 export type NextActionKind =
   | "generate_draft"
   | "review_draft"
+  | "fix_draft"
   | "wait_for_job"
   | "engine_action"
   | "unknown";
@@ -129,6 +142,16 @@ export function nextAction(
     };
   }
   const hint = cur.next_action;
+  if (cur.stage === "draft" && cur.status === "blocked" && /\binvalid\b/.test(cur.detail ?? "")) {
+    return {
+      kind: "fix_draft",
+      title: "Check the draft",
+      description:
+        "The engine reports that the draft is not valid, for example because a file changed " +
+        "after it was generated. Open the draft to see the engine's errors.",
+      engineHint: hint,
+    };
+  }
   if (cur.stage === "draft" && cur.status === "blocked") {
     return {
       kind: "generate_draft",
@@ -139,12 +162,15 @@ export function nextAction(
     };
   }
   if (cur.stage === "draft" && cur.status === "needs_review") {
+    const stale = /\bstale\b/.test(cur.detail ?? "");
     return {
       kind: "review_draft",
-      title: "Review the draft",
-      description:
-        "The engine is waiting for editorial review (gate G1). Read the outline and script. " +
-        "Approval is recorded with the engine CLI in this milestone.",
+      title: stale ? "Review the draft again" : "Review the draft",
+      description: stale
+        ? "The previous approval is out of date because a reviewed file changed. " +
+          "Review the draft and approve it again (gate G1)."
+        : "The engine is waiting for editorial review (gate G1). Read the outline and " +
+          "script, check the validation results, then approve the draft.",
       engineHint: hint,
     };
   }

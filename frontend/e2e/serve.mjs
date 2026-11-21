@@ -16,7 +16,7 @@ const frontend = resolve(here, "..");
 const backend = resolve(frontend, "../backend");
 const BACKEND_PORT = process.env.E2E_BACKEND_PORT ?? "8100";
 const FRONTEND_PORT = process.env.E2E_FRONTEND_PORT ?? "3100";
-const tmp = mkdtempSync(join(tmpdir(), "yta-e2e-"));
+const tmp = process.env.E2E_TMP ?? mkdtempSync(join(tmpdir(), "yta-e2e-"));
 const engineRepo = process.env.YTA_ENGINE_REPO ?? resolve(frontend, "../../youtube-agent");
 const engineMode =
   process.env.E2E_ENGINE ?? (existsSync(join(engineRepo, ".venv")) ? "real" : "fake");

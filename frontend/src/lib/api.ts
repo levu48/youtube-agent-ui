@@ -230,12 +230,45 @@ export interface DraftCheck {
   scenes?: number;
 }
 
+/** The engine's review.json, for display only. Whether it is current comes from
+ * `draft_check.approval_status`, never from this record. */
+export interface ApprovalRecord {
+  status: string | null;
+  reviewer: string | null;
+  approved_at: string | null;
+  comment: string | null;
+  artifacts: Record<string, string>;
+  unresolved_blockers: string[];
+  meaning: string | null;
+}
+
 export interface DraftView {
   available: boolean;
   outline: ArtifactView<Outline>;
   script: ArtifactView<Script>;
   draft_check: DraftCheck | null;
   draft_check_error: PublicError | null;
+  /** Identifies the exact reviewed files that were checked; null if they changed meanwhile. */
+  review_token: string | null;
+  approval: ApprovalRecord | null;
+  active_job_id: string | null;
+}
+
+export interface ApproveInput {
+  reviewer: string;
+  comment?: string | null;
+  confirm: true;
+  review_token: string;
+}
+
+export interface ApproveResult {
+  already_approved: boolean;
+  approved_version_matches: boolean;
+  approval: ApprovalRecord | null;
+  draft_check: DraftCheck | null;
+  draft_check_error: PublicError | null;
+  review_token: string | null;
+  status: StatusSummary;
 }
 
 export class ApiError extends Error {
@@ -335,6 +368,8 @@ export const api = {
   draftCheck: (id: string) => request<DraftCheck>(`/projects/${encodeURIComponent(id)}/draft-check`),
   draftAvailable: (id: string) =>
     request<{ available: boolean }>(`/projects/${encodeURIComponent(id)}/draft-available`),
+  approveDraft: (id: string, input: ApproveInput) =>
+    post<ApproveResult>(`/projects/${encodeURIComponent(id)}/draft/approve`, input),
   locationPreview: (slug: string) =>
     request<LocationPreview>(`/projects/location-preview?slug=${encodeURIComponent(slug)}`),
   discoverable: () => request<{ slug: string; location: string }[]>("/projects/discoverable"),
