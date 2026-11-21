@@ -12,6 +12,7 @@ from typing import Any
 
 from app.engine import commands
 from app.engine.errors import Classification, classify, engine_error_line, redact
+from app.engine.process import FAST_STEPS, terminate_group
 
 _ENV_PASSTHROUGH = (
     "HOME",
@@ -103,12 +104,24 @@ class EngineCLI:
         except OSError as exc:
             raise EngineUnavailable(f"cannot start engine: {exc.strerror or exc}") from exc
         timed_out = False
+        reader = asyncio.ensure_future(proc.communicate())
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except TimeoutError:
-            timed_out = True
-            proc.kill()
-            out, err = await proc.communicate()
+            done, _ = await asyncio.wait({reader}, timeout=timeout)
+            if not done:
+                # Timed out: stop the launcher *and* every descendant (the whole group),
+                # wait until the group is empty, and reap the launcher.
+                timed_out = True
+                await terminate_group(proc, FAST_STEPS)
+            try:
+                out, err = await asyncio.wait_for(reader, timeout=5.0)
+            except TimeoutError:  # pragma: no cover - pipes held open after SIGKILL
+                reader.cancel()
+                out, err = b"", b""
+        except BaseException:
+            # The caller was cancelled (e.g. client disconnected): never leave the group behind.
+            reader.cancel()
+            await asyncio.shield(terminate_group(proc, FAST_STEPS))
+            raise
         return EngineResult(
             argv=args,
             exit_code=proc.returncode,

@@ -2,6 +2,8 @@
 
 Modes for ``draft``: ``ok`` (default), ``slow`` (prints a line every 0.05 s for ~20 s),
 ``fail`` (exit 10), ``gate`` (exit 16), ``stubborn`` (ignores SIGINT), ``secret``
+(credential-looking output), ``tree_wait|tree_orphan|tree_ignore`` (launcher + child,
+see spawn_tree.py), ``secret``
 (prints a credential-looking line), ``bad_json`` (status/check print garbage).
 """
 
@@ -9,10 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import sys
 import time
 from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures" / "engine"
+DRAFT_FILES = ("outline.json", "outline.md", "script.json", "script.md", "storyboard.draft.json")
 
 
 def _opts(argv: list[str]) -> dict[str, str]:
@@ -30,10 +36,16 @@ def main() -> int:
     argv = sys.argv[1:]
     mode = os.environ.get("FAKE_MODE", "ok")
     if argv == ["--version"]:
-        print("ytagent 9.9.9-fake")
+        print("ytagent 0.1.0+fake")
         return 0
     cmd, o = argv[0], _opts(argv[1:])
     root = Path(o["project-root"])
+    # Per-project override for browser tests: an idea containing "[slow]" drafts slowly.
+    try:
+        if "[slow]" in json.loads((root / "input.json").read_text(encoding="utf-8"))["idea"]:
+            mode = "slow"
+    except (OSError, ValueError, KeyError):
+        pass
     if cmd == "create":
         if (root / "input.json").exists():
             print(f"error: {root} is already a project", file=sys.stderr)
@@ -62,6 +74,13 @@ def main() -> int:
     if cmd == "draft":
         (root / "draft-argv.json").write_text(json.dumps(argv), encoding="utf-8")
         print("starting draft", flush=True)
+        if mode.startswith("tree_"):
+            # Launcher/child process tree (see tests/spawn_tree.py).
+            sys.path.insert(0, str(Path(__file__).parent))
+            import spawn_tree
+
+            os.environ["TREE_MODE"] = mode.removeprefix("tree_")
+            return spawn_tree.main()
         if mode == "secret":
             print("using api_key=sk-abcdefghijklmnop1234 Bearer abcdefghijklmnop", flush=True)
         if mode in ("slow", "stubborn"):
@@ -80,27 +99,9 @@ def main() -> int:
         if mode == "gate":
             print("error: human gate", file=sys.stderr)
             return 16
-        (root / "outline.json").write_text(
-            json.dumps({"title": "Bản nháp", "sections": [{"id": "sec-01", "heading": "Mở đầu"}]}),
-            encoding="utf-8",
-        )
-        (root / "script.json").write_text(
-            json.dumps(
-                {
-                    "title": "Bản nháp",
-                    "sections": [
-                        {
-                            "outline_section_id": "sec-01",
-                            "heading": "Mở đầu",
-                            "narration": "Xin chào.",
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        (root / "outline.md").write_text("# Bản nháp\n", encoding="utf-8")
-        (root / "script.md").write_text("# Bản nháp\n\nXin chào.\n", encoding="utf-8")
+        # Publish the real engine's fixture-provider output (captured from youtube-agent).
+        for name in DRAFT_FILES:
+            shutil.copyfile(FIXTURES / "draft" / name, root / name)
         print("draft published", flush=True)
         return 0
     if cmd == "production-status":
@@ -108,47 +109,16 @@ def main() -> int:
             print("not json")
             return 0
         drafted = (root / "script.json").exists()
-        print(
-            json.dumps(
-                {
-                    "project_id": "prj-x",
-                    "stages": [
-                        {
-                            "stage": "intake",
-                            "mode": None,
-                            "status": "completed",
-                            "detail": "ok",
-                            "next_action": None,
-                        },
-                        {
-                            "stage": "draft",
-                            "mode": None,
-                            "status": "needs_review" if drafted else "blocked",
-                            "detail": "G1",
-                            "next_action": "review",
-                        },
-                    ],
-                }
-            )
-        )
+        name = "production-status-drafted.json" if drafted else "production-status-created.json"
+        print((FIXTURES / name).read_text(encoding="utf-8"))
         return 0
     if cmd == "draft-check":
         if mode == "bad_json":
             print("{oops")
             return 0
         ok = (root / "script.json").exists()
-        print(
-            json.dumps(
-                {
-                    "ok": ok,
-                    "errors": [] if ok else ["script.json is missing"],
-                    "warnings": [],
-                    "review_blockers": ["unverified"],
-                    "approval_status": "not_approved",
-                    "artifacts": [],
-                }
-            )
-        )
+        name = "draft-check-ok.json" if ok else "draft-check-missing.json"
+        print((FIXTURES / name).read_text(encoding="utf-8"))
         return 0 if ok else 2
     print(f"error: unknown command {cmd}", file=sys.stderr)
     return 2

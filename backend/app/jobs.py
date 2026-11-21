@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import signal
 import subprocess
 import uuid
@@ -29,6 +28,13 @@ from typing import Any
 from app.db import Database, utcnow
 from app.engine import commands
 from app.engine.errors import classify, engine_error_line, redact
+from app.engine.process import (
+    FAST_STEPS,
+    group_alive,
+    signal_group,
+    terminate_group,
+    wait_exit,
+)
 from app.engine.runner import EngineCLI, EngineUnavailable
 from app.errors import ApiError
 from app.schemas import TERMINAL_STATUSES, JobDetail, JobEventOut, JobOut
@@ -110,8 +116,7 @@ class JobManager:
             else:
                 msg = "The backend restarted while this job was running; its outcome is unknown."
                 if row["pid"] and _process_matches(row["pid"], row["process_started"]):
-                    with contextlib.suppress(ProcessLookupError, PermissionError):
-                        os.killpg(row["pid"], signal.SIGINT)
+                    signal_group(row["pid"], signal.SIGINT)
                     msg = (
                         "The backend restarted while this job was running; the engine process "
                         "was interrupted. Run the draft again to let the engine recover."
@@ -294,15 +299,9 @@ class JobManager:
         self._terminators[job_id] = asyncio.create_task(self._escalate(proc, grace))
 
     async def _escalate(self, proc: asyncio.subprocess.Process, grace: float) -> None:
-        # The Process object is ours and is only reaped when it exits, so while returncode
-        # is None, proc.pid still identifies our child (and its process group).
-        for sig, wait in ((signal.SIGINT, grace), (signal.SIGTERM, 5.0), (signal.SIGKILL, 5.0)):
-            if proc.returncode is not None:
-                return
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, sig)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(proc.wait(), timeout=wait)
+        # Signal the whole process group (launcher and descendants) until it is empty.
+        steps = ((signal.SIGINT, grace), (signal.SIGTERM, 5.0), (signal.SIGKILL, 5.0))
+        await terminate_group(proc, steps)
 
     # ------------------------------------------------------------------ worker
 
@@ -372,11 +371,22 @@ class JobManager:
         counter = {"n": 0, "truncated": False}
         stderr_tail: list[str] = []
         with open(log_path, "a", encoding="utf-8") as logf:
-            await asyncio.gather(
+            pumps = asyncio.gather(
                 self._pump(job_id, proc.stdout, "stdout", logf, counter, None),
                 self._pump(job_id, proc.stderr, "stderr", logf, counter, stderr_tail),
             )
-            rc = await proc.wait()
+            rc = await wait_exit(proc)
+            # The launcher has exited. A descendant that is still alive could hold the output
+            # pipes open (and keep writing engine files): make sure the whole group is gone.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(pumps), timeout=2.0)
+            terminator = self._terminators.get(job_id)
+            if terminator is not None:
+                await terminator
+            if group_alive(proc.pid):
+                logf.write(f"{utcnow()} [ui] stopping engine processes left after exit\n")
+                await terminate_group(proc, FAST_STEPS)
+            await pumps
             logf.write(f"{utcnow()} [exit] {rc}\n")
 
         cancel_requested = bool(self._row(job_id)["cancel_requested"])
