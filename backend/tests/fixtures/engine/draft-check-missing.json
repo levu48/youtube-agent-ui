@@ -1,0 +1,45 @@
+{
+  "ok": false,
+  "artifacts": [
+    {
+      "path": "outline.json",
+      "sha256": null,
+      "state": "missing"
+    },
+    {
+      "path": "outline.md",
+      "sha256": null,
+      "state": "missing"
+    },
+    {
+      "path": "script.json",
+      "sha256": null,
+      "state": "missing"
+    },
+    {
+      "path": "script.md",
+      "sha256": null,
+      "state": "missing"
+    },
+    {
+      "path": "storyboard.draft.json",
+      "sha256": null,
+      "state": "missing"
+    }
+  ],
+  "errors": [
+    "outline.json is missing (run `ytagent draft`)",
+    "script.json is missing (run `ytagent draft`)",
+    "storyboard.draft.json is missing (run `ytagent draft`)"
+  ],
+  "warnings": [],
+  "review_blockers": [
+    "Content is unverified: an LLM is not a research source. Every factual statement needs evidence and citations (research is Milestone 5)."
+  ],
+  "approval_status": "not_approved",
+  "approval_changed": [],
+  "needs_visuals": [],
+  "flag_counts": {},
+  "timing": null,
+  "scenes": 0
+}
