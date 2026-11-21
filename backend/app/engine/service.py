@@ -13,7 +13,7 @@ from app.engine.public_errors import FIXED, to_public
 from app.engine.runner import EngineCLI, EngineResult, EngineUnavailable
 from app.schemas import EngineInfo, StageOut, StatusSummary
 
-CAPABILITIES = ["create", "draft", "production-status", "draft-check"]
+CAPABILITIES = ["create", "draft", "production-status", "draft-check", "draft-approve"]
 _STATUS_TTL = 20.0
 
 
@@ -87,6 +87,15 @@ class EngineService:
         if not isinstance(data, dict) or "ok" not in data:
             raise EngineReadError("engine_bad_json", "Unrecognised draft-check report.")
         return data
+
+    async def draft_approve(
+        self, root: Path, *, reviewer: str, comment: str | None
+    ) -> EngineResult:
+        """Run ``draft-approve`` (a short, lock-protected engine write). Callers interpret the
+        exit code; afterwards the engine's draft-check is the source of truth."""
+        args = commands.draft_approve_args(root, reviewer=reviewer, comment=comment)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout)
 
 
 class EngineReadError(RuntimeError):

@@ -11,16 +11,24 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app import __version__
-from app.artifacts import draft_files_present, read_draft
+from app.artifacts import (
+    draft_files_present,
+    read_draft,
+    read_review,
+    review_token,
+    reviewed_hashes,
+)
 from app.config import home_relative
 from app.engine import commands
-from app.engine.public_errors import to_public
+from app.engine.errors import redact
+from app.engine.public_errors import MAX_ENGINE_MESSAGE, to_public
 from app.errors import ApiError
 from app.ollama import model_installed, ollama_info
 from app.projects import ProjectRow, read_input
 from app.schemas import (
     TERMINAL_STATUSES,
     DiscoveredProject,
+    DraftApprove,
     DraftJobCreate,
     EngineInfo,
     Health,
@@ -181,20 +189,141 @@ async def project_draft_check(project_id: str, s: State) -> dict:
         raise ApiError(pe.status, pe.code, pe.message) from None
 
 
+async def _checked(s: AppState, root) -> tuple[dict | None, dict | None, str | None]:
+    """Run the engine's draft-check and derive the review token for the same file contents.
+
+    The token is only issued when the files hashed before and after the check are identical
+    and match the hashes the engine reported, so it always describes the draft that was
+    checked. Otherwise it is None and the reviewer must validate again."""
+    check: dict | None = None
+    error: dict | None = None
+    token: str | None = None
+    for _ in range(2):
+        try:
+            before = reviewed_hashes(root)
+        except OSError:
+            before = None
+        try:
+            check, error = await s.engine.draft_check(root), None
+        except Exception as exc:
+            return None, to_public(exc, operation="draft-check").as_dict(), None
+        try:
+            after = reviewed_hashes(root)
+        except OSError:
+            after = None
+        if before is None or before != after:
+            continue
+        engine_view = {
+            a.get("path"): a.get("sha256")
+            for a in check.get("artifacts") or []
+            if isinstance(a, dict) and a.get("path") in after
+        }
+        if all(after.get(p) == h for p, h in engine_view.items()):
+            token = review_token(after)
+            break
+    return check, error, token
+
+
 @router.get("/projects/{project_id}/draft")
 async def project_draft(project_id: str, s: State) -> dict:
-    """Artifacts plus the engine's draft-check. A failed check is reported with the same
-    sanitized ``{code, message}`` as ``/draft-check`` would return, never a raw exception."""
+    """Artifacts, the engine's draft-check, the engine's review record and a review token.
+
+    A failed check is reported with the same sanitized ``{code, message}`` as
+    ``/draft-check`` would return, never a raw exception. Every call runs draft-check again,
+    so this is also the "Validate draft" action."""
     row = s.projects.require(project_id)
     root = s.projects.confined_root(row)
     out = read_draft(root)
-    try:
-        out["draft_check"] = await s.engine.draft_check(root)
-        out["draft_check_error"] = None
-    except Exception as exc:
-        out["draft_check"] = None
-        out["draft_check_error"] = to_public(exc, operation="draft-check").as_dict()
+    check, error, token = await _checked(s, root)
+    out["draft_check"] = check
+    out["draft_check_error"] = error
+    out["review_token"] = token
+    out["approval"] = read_review(root)
+    active = s.jobs.active_for(row.id)
+    out["active_job_id"] = active.id if active else None
     return out
+
+
+def _approve_failure(res) -> ApiError:
+    """Map a non-zero draft-approve exit to a public error (redacted engine message)."""
+    lines = [ln.strip() for ln in redact(res.stderr).splitlines() if ln.strip()]
+    msg = next((ln.removeprefix("error:").strip() for ln in lines if ln.startswith("error:")), "")
+    msg = msg[:MAX_ENGINE_MESSAGE]
+    if res.exit_code == 2:
+        errors = [ln.removeprefix("- ").strip() for ln in lines if ln.startswith("- ")][:50]
+        return ApiError(
+            422,
+            "approval_refused",
+            f"The engine refused the approval: {msg}" if msg else "The engine refused it.",
+            {"errors": errors},
+        )
+    if res.exit_code == 9:
+        return ApiError(
+            409,
+            "engine_conflict",
+            "Another engine run is using this project. Try again when it has finished.",
+        )
+    code = res.classification.code
+    return ApiError(
+        502, code, f"The engine reported an error: {msg}" if msg else res.classification.summary
+    )
+
+
+@router.post("/projects/{project_id}/draft/approve")
+async def approve_draft(project_id: str, body: DraftApprove, s: State) -> dict:
+    """Record G1 editorial approval through ``ytagent draft-approve``.
+
+    Refused while a job is active (409 ``job_conflict``) or when the reviewed files changed
+    since the reviewer's last validation (409 ``draft_changed``). The response reports the
+    engine's state after the command; nothing is inferred from the exit code alone."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    with s.jobs.exclusive(row.id):
+        try:
+            seen = reviewed_hashes(root)
+        except OSError:
+            raise ApiError(422, "draft_unreadable", "The draft files cannot be read.") from None
+        current = review_token(seen)
+        if current != body.review_token:
+            raise ApiError(
+                409,
+                "draft_changed",
+                "The draft changed after you last validated it. Review the latest version, "
+                "then approve again.",
+            )
+        try:
+            res = await s.engine.draft_approve(root, reviewer=body.reviewer, comment=body.comment)
+        except commands.ArgumentError as exc:
+            raise ApiError(422, "validation_error", str(exc)) from None
+        except Exception as exc:
+            pe = to_public(exc, operation="draft-approve")
+            raise ApiError(pe.status, pe.code, pe.message) from None
+        finally:
+            s.engine.invalidate(row.id)
+            s.projects.touch(row.id)
+        if res.timed_out:
+            raise ApiError(
+                504,
+                "engine_timeout",
+                "The engine did not finish the approval in time. Reload to see whether it "
+                "was recorded.",
+            )
+        if res.exit_code != 0:
+            raise _approve_failure(res)
+    record = read_review(root)
+    check, error, token = await _checked(s, root)
+    approved = {k: v for k, v in seen.items() if v}
+    return {
+        "already_approved": res.stdout.lstrip().startswith("already approved"),
+        # False if the engine's record covers different bytes than the reviewer validated
+        # (a change raced in between the UI check and the engine's own snapshot).
+        "approved_version_matches": bool(record) and record.get("artifacts") == approved,
+        "approval": record,
+        "draft_check": check,
+        "draft_check_error": error,
+        "review_token": token,
+        "status": (await _status(s, row, fresh=True)).model_dump(),
+    }
 
 
 @router.get("/projects/{project_id}/draft-available")

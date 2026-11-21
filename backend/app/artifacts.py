@@ -6,6 +6,7 @@ validated project directory, bounded in size and valid UTF-8.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -126,3 +127,68 @@ def read_draft(root: Path) -> dict[str, Any]:
 
 def draft_files_present(root: Path) -> bool:
     return all(read_text(root, n)[2] == "ok" for n in ("outline.json", "script.json"))
+
+
+# ------------------------------------------------------------------ G1 review state
+
+# Files the engine binds into a G1 approval (youtube-agent drafting.REVIEWED @ d1325c4).
+# assets.json is only present once visuals exist.
+REVIEWED_FILES = (
+    "input.json",
+    "outline.json",
+    "script.json",
+    "storyboard.draft.json",
+    "assets.json",
+)
+
+
+def _read_bytes(root: Path, name: str) -> bytes | None:
+    p = root / name
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_ARTIFACT_BYTES:
+        raise OSError(f"{name} is not a readable regular file")
+    with open(p, "rb") as fh:
+        return fh.read(MAX_ARTIFACT_BYTES + 1)
+
+
+def reviewed_hashes(root: Path) -> dict[str, str | None]:
+    """SHA-256 of each file a G1 approval covers, as currently on disk (None if absent)."""
+    out: dict[str, str | None] = {}
+    for name in REVIEWED_FILES:
+        data = _read_bytes(root, name)
+        out[name] = hashlib.sha256(data).hexdigest() if data is not None else None
+    return out
+
+
+def review_token(hashes: dict[str, str | None]) -> str:
+    """Opaque token for "the exact draft the reviewer saw".
+
+    Not an engine revision: the UI uses it only to refuse an approval when the reviewed files
+    changed after the reviewer last validated. The engine still decides what it approves."""
+    h = hashlib.sha256()
+    for name in REVIEWED_FILES:
+        h.update(f"{name}\0{hashes.get(name) or '-'}\n".encode())
+    return h.hexdigest()
+
+
+class ReviewRecord(_Lenient):
+    status: str | None = None
+    reviewer: str | None = None
+    approved_at: str | None = None
+    comment: str | None = None
+    artifacts: dict[str, str] = Field(default_factory=dict)
+    unresolved_blockers: list[str] = Field(default_factory=list)
+    meaning: str | None = None
+
+
+def read_review(root: Path) -> dict[str, Any] | None:
+    """The engine's review.json (read-only, for display). Whether the approval is current is
+    decided by the engine's draft-check ``approval_status``, never by this record."""
+    rec, _, state = _read_model(root, "review.json", ReviewRecord)
+    if state != "ok" or rec is None:
+        return None
+    d = rec.model_dump(include=set(ReviewRecord.model_fields))
+    return d
