@@ -174,9 +174,9 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
    - the persistent IDs `ev-…` and `rc-…`, `migrate_ids`, and translation operations;
    - recheck update and remove, with rechecks keyed by (source, **cited** snapshot, current snapshot), as the engine already matches them (`checks.py:425`);
    - an explicit `migrate_review_file` upgrade from `m5-review-0.1`, keeping every decision, outdated until confirmed again.
-2. **Revisions.** No expected revision; no revision reported. **E1:** `revision` in `research-check --json`, and `--expect-revision` on every mutating command. Collect and add-url re-check it after the network phase, and the dry-run preview checks it too.
+2. **Revisions.** No expected revision; no revision reported. **E1:** `revision` in `research-check --json`, over the G2-bound files, the tool records and the storyboard's narration fingerprint (not the storyboard's bytes, so claim IDs from `research-apply` and shots do not change it). `--expect-revision` on every mutating command; collect and add-url re-check it after the network phase, and the dry-run preview checks it too.
 3. **JSON.** Only `research-check` prints it, and exit 2 is ambiguous. **E1:** `--json` everywhere and the error envelope with distinct codes.
-4. **Network control.** `research-collect` reaches any queued host. **E1:** a `--dry-run` fetch-plan preview with `plan_sha256`, and `--allow-host` enforced on every request and redirect (`host_not_allowed`).
+4. **Network control.** `research-collect` reaches any queued host, and the Wikipedia client accepts both language wikis, so an API redirect between them would be followed. **E1:** a `--dry-run` fetch-plan preview with `plan_sha256` (hosts as a conservative permission scope), and `--allow-host` enforced on every request and redirect, including Wikipedia API and `robots.txt` redirects (`host_not_allowed`).
 5. **Review invalidation.** A review survives changes to its claim and evidence. **E2:**
    - a component review `basis` (claim including flags, anchors, per-link content, snapshots) and blocking `review_outdated`;
    - completeness bound to both the narration and the claim inventory;
@@ -189,7 +189,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 7. **Progress.** Collect is silent. **E1:** a stderr line per search and fetch.
 8. **Read contract.** **E1** documents `snapshots.json` and `pages/<sha256>.txt` as stable reads with hash verification.
 
-`ENGINE_REF` stays at `573ebdd` until E1 merges. Each UI PR pins the engine merge it needs.
+**E1 status.** Implemented in engine PR #12 (D-118), a draft in review. `ENGINE_REF` stays at `573ebdd` until it merges. Each UI PR pins the engine merge it needs.
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 

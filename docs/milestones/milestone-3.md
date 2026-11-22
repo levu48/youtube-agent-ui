@@ -1,6 +1,6 @@
 # Milestone 3 — Research Workspace: Claims, Sources, Evidence Review and G2 Approval
 
-**Status:** specification. Nothing here is implemented yet. Three separate engine PRs (E1, E2, E3) are prerequisites.
+**Status:** specification. Three separate engine PRs (E1, E2, E3) are prerequisites. E1 is implemented in engine PR #12 (D-118, draft, in review); E2, E3 and the UI work are not started.
 
 **Goal:** a reviewer can research every factual statement of an approved draft in the browser, approve the research (G2) and apply it, with the `youtube-agent` engine as the only authority. This covers:
 - the claim inventory and its classification;
@@ -64,12 +64,14 @@ The UI never writes, moves or deletes engine-owned files. At `573ebdd` a browser
 
 Three engine PRs in `youtube-agent`, each with a decision entry, README update and tests, are reviewed and merged before the UI PR that needs them. If one cannot land, the UI ships only what the merged capabilities allow and does not claim M3 complete.
 
-### E1 — research CLI contract (no policy change)
-- **Research revision.** `research-check --json` adds `revision`: sha256 of the canonical JSON `{"files": {rel: sha256|null}, "scheme": "m5-research-revision-1"}`. The files are:
+### E1 — research CLI contract (no policy change; engine PR #12, D-118)
+- **Research revision.** `research-check --json` adds `revision`: sha256 of the canonical JSON `{"files": {rel: sha256|null}, "narration_fingerprint": fp|null, "scheme": "m5-research-revision-1"}`. The files are:
   - `input.json`, `outline.json`, `script.json`;
   - `research-plan.json`, `evidence.json`, `research-review.json`;
   - `research.json`, `render/research/snapshots.json`, `research-approval.json`;
   - `render/llm/narration-provenance.json` (E3; `null` until it exists).
+
+  The storyboard's bytes are not in the revision, because `research-apply` changes only its claim IDs and `visuals-apply` only its shots. Its **narration fingerprint** is (ordered scene, section, language and NFC narration, excluding shots and claim IDs), because G2 binds it: a narration change in the storyboard alone changes the revision, while claim-ID-only and shot-only changes do not.
 - **Expected revision.**
   - `--expect-revision=R` on `research-plan`, `research-collect` (including `--dry-run`), `research-add-url`, `research-link`, `research-approve`, `research-apply` and `research-export`.
   - It is checked under the project lock after journal recovery.
@@ -78,19 +80,25 @@ Three engine PRs in `youtube-agent`, each with a decision entry, README update a
 - **Fetch-plan preview.** `research-collect --dry-run --expect-revision=R --json` contacts nothing. It returns:
   - `revision`;
   - `search_hosts`;
-  - `provider_result_hosts`: fixed per provider; for Wikipedia, `{lang}.wikipedia.org` for each chosen language;
+  - `provider_result_hosts`: fixed per provider; for Wikipedia, `{lang}.wikipedia.org` for each chosen language. These are potential destinations of search results, not guaranteed requests, and are listed only when searches are pending and pages will be fetched;
   - `known_targets[{source_id, url, host, reason}]`: queued and discovered sources that would be fetched;
   - `hosts`: the union of the above;
   - `plan_sha256`: a hash of the revision, the parameters and `hosts`.
+
+  The hosts are a conservative permission scope, not a forecast: a run contacts a subset of them.
 - **Host allowlist.**
   - `--allow-host=H` (repeatable) is required for every live fetch in `research-collect` and `research-add-url`.
-  - It is enforced on every search request, every fetch and every redirect hop.
-  - Any other host is not contacted. The attempt is recorded as `host_not_allowed` (discovered, not fetched) and shows up in the next preview.
-- **`--json` on every research command**, with the draft commands' error envelope `{"ok": false, "error": {"code", "exit_code", "message", …}}`. The codes are:
+  - It is enforced on every search request, every fetch and every redirect hop, including redirects of the Wikipedia API itself (the search provider confines its own requests; its client accepts both language wikis) and redirects of a page's `robots.txt`.
+  - Any other host is not contacted. The attempt is recorded as `host_not_allowed` (discovered, not fetched) and shows up in the next preview. A `robots.txt` redirect to an unconfirmed host is reported as `host_not_allowed`, not as a robots disallow. A refused search redirect is a `host_not_allowed` search, not a failed search.
+  - Without `--allow-host`, live network use stops with exit 2 (`invalid_input`) before anything is contacted. Queued URLs and fixture runs need none.
+- **`--json` on every research command.** Results are `{"ok": true, …, "revision"}`; errors use the draft commands' envelope `{"ok": false, "error": {"code", "exit_code", "message", …}}` on stdout, with the message also on stderr. The codes are:
   - `invalid_input`, `human_edit_conflict` (now distinct from `invalid_input`);
-  - `revision_mismatch`, `concurrency`;
-  - `approval_stale`, `not_approvable`, `partial_search_failure`;
-  - `provider_unavailable`, `unresolved_publication`.
+  - `revision_mismatch`, `concurrency`, `unresolved_publication`;
+  - `approval_stale` and `g1_not_current` (both exit 12), `not_approvable` (14), `partial_search_failure` (15, with the saved partial result in `details`);
+  - `provider_unavailable`, `llm_error`.
+- **Two exceptions to the envelope.**
+  - `research-check --json` prints the report's own fields plus `revision`, with no `ok` field, and exits 14, still printing the JSON, when the research is not approvable.
+  - A command line argparse cannot parse (unknown flag, missing required option, invalid choice) exits 2 with argparse's usage message on stderr and nothing on stdout, with or without `--json`. The backend's allowlisted argv should never produce one; it treats exit 2 with empty stdout as an adapter error.
 - **Progress.** `research-collect` writes one stderr line per search and per fetch outcome.
 - **Read contract.** `render/research/snapshots.json` and `render/research/pages/<sha256>.txt` are documented, read-only artifacts. Readers verify `text_sha256`.
 
@@ -605,7 +613,7 @@ UI-0 (this spec) ─► E1 engine: research CLI contract ─► E2 engine: resea
 | PR | Repository | Depends on | Content | Verified by |
 |---|---|---|---|---|
 | UI-0 | UI | none | this specification, the compatibility section, the API contract, the roadmap | review |
-| E1 | engine | UI-0 reviewed | revision; `--expect-revision` (including dry-run, and collect/add-url after the network phase); the fetch-plan preview; `--allow-host`; `--json` and the error envelope; progress; the read contract | engine pytest, run locally while engine CI is blocked by billing |
+| E1 | engine | UI-0 reviewed | revision (including the storyboard's narration fingerprint); `--expect-revision` (including dry-run, and collect/add-url after the network phase); the fetch-plan preview; `--allow-host` (including Wikipedia and `robots.txt` redirects); `--json` and the error envelope; progress; the read contract. **Engine PR #12, draft.** | engine pytest, run locally while engine CI is blocked by billing |
 | E2 | engine | E1 | `research-edit`, persistent link and recheck IDs, `migrate_ids`, `migrate_review_file`, per-cited-snapshot rechecks, translation operations, recheck update/remove, component review basis, `review_outdated`, inventory-bound completeness, append-only hash-chained history, policy `m5-research-3` | engine pytest |
 | E3 | engine | E2 | `research-add-document` (`doc-` sources, schemas `m5-research-0.2`/`m5-snapshots-0.2`, excluded from network paths) with provenance and `acquisition`, `narration-provenance-init`, replacement ancestry, primary-source attestation and revocation, narration lineage, `narration-attest`, fail-closed provenance, provenance in the revision and the G2 binding | engine pytest |
 | UI-A | UI | E1 | research reads, the snapshot reader, plan jobs, the **engine fetch-plan preview with expected revision and an explicit confirmed-host allowlist** for collect and add-URL, Research navigation | backend, frontend, E2E, real-engine script, CI |
