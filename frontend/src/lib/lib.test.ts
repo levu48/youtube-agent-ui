@@ -97,3 +97,12 @@ describe("format", () => {
     expect(formatDuration(null)).toBe("—");
   });
 });
+
+describe("approvalPresentation", () => {
+  it("never labels an unconfirmed engine approval as approved", () => {
+    expect(approvalPresentation("approved").label).toBe("G1 approved");
+    expect(approvalPresentation("approved", true).label).toBe("G1 approved");
+    expect(approvalPresentation("approved", false)).toMatchObject({ label: "G1 approval unconfirmed", tone: "warning" });
+    expect(approvalPresentation("stale", false).label).toBe("G1 approval out of date");
+  });
+});

@@ -55,7 +55,11 @@ export const APPROVAL_STATUS: Record<string, Presentation> = {
   not_approved: { label: "G1 not approved", tone: "neutral", icon: CircleDashed },
 };
 
-export function approvalPresentation(status: string | null | undefined): Presentation {
+export function approvalPresentation(status: string | null | undefined, confirmed?: boolean | null): Presentation {
+  // An engine approval the UI could not tie to the version the reviewer validated is never
+  // shown as a plain "approved".
+  if (status === "approved" && confirmed === false)
+    return { label: "G1 approval unconfirmed", tone: "warning", icon: AlertTriangle };
   if (!status) return { label: "G1 status unknown", tone: "neutral", icon: CircleDashed };
   return APPROVAL_STATUS[status] ?? { label: `G1 ${humanize(status)}`, tone: "neutral", icon: CircleDashed };
 }

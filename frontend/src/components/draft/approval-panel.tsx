@@ -42,7 +42,8 @@ export function approvalBlocker(d: DraftView): string | null {
   if (!d.draft_check) return "The engine check could not be run, so the draft cannot be approved.";
   if (!d.draft_check.ok)
     return "The engine refuses approval while the draft has errors. Fix the errors listed above first.";
-  if (!d.review_token) return "The draft changed while it was being checked. Validate it again.";
+  if (!d.review_token)
+    return d.review_token_reason || "The draft changed while it was being checked. Validate it again.";
   return null;
 }
 
@@ -71,6 +72,8 @@ export function ApprovalPanel({
   const status = check?.approval_status;
   const record = draft.approval;
   const blocker = approvalBlocker(draft);
+  // The engine reports approved, but not for a version the UI could confirm was validated.
+  const unconfirmed = status === "approved" && draft.approval_confirmed === false;
 
   const approve = useMutation({
     mutationFn: () =>
@@ -83,7 +86,9 @@ export function ApprovalPanel({
     onSuccess: (res: ApproveResult) => {
       setConfirming(false);
       setFailure(null);
-      setMismatch(!res.approved_version_matches);
+      // A mismatch always wins over success: never toast "approved" for an unconfirmed version.
+      const mismatched = res.approved_version_matches !== true || res.approval_confirmed === false;
+      setMismatch(mismatched);
       rememberReviewer(reviewer.trim());
       qc.setQueryData<DraftView>(qk.draft(projectId), (old) =>
         old
@@ -92,7 +97,10 @@ export function ApprovalPanel({
               draft_check: res.draft_check,
               draft_check_error: res.draft_check_error,
               review_token: res.review_token,
+              review_token_reason: res.review_token_reason ?? null,
+              review_mode: res.review_mode ?? old.review_mode,
               approval: res.approval,
+              approval_confirmed: res.approval_confirmed ?? old.approval_confirmed,
             }
           : old,
       );
@@ -100,7 +108,9 @@ export function ApprovalPanel({
       void qc.invalidateQueries({ queryKey: qk.projects });
       void qc.invalidateQueries({ queryKey: qk.draft(projectId) });
       const now = res.draft_check?.approval_status;
-      if (now === "approved") {
+      if (mismatched) {
+        toast.warning("The approval does not match the version you validated. See the approval panel.");
+      } else if (now === "approved") {
         toast.success(res.already_approved ? "The draft was already approved" : "Editorial draft approved (G1)");
       } else {
         toast.warning("The engine did not report the draft as approved. See the approval panel.");
@@ -108,7 +118,14 @@ export function ApprovalPanel({
     },
     onError: (e) => {
       setConfirming(false);
-      setFailure(e instanceof ApiError ? e : new ApiError(0, "error", (e as Error).message));
+      const err = e instanceof ApiError ? e : new ApiError(0, "error", (e as Error).message);
+      setFailure(err);
+      if (err.code === "approval_unconfirmed") {
+        // The engine wrote a record; reload so the panel shows it as unconfirmed, not approved.
+        void qc.invalidateQueries({ queryKey: qk.draft(projectId) });
+        void qc.invalidateQueries({ queryKey: qk.projectStatus(projectId) });
+        void qc.invalidateQueries({ queryKey: qk.projects });
+      }
     },
   });
 
@@ -130,7 +147,7 @@ export function ApprovalPanel({
   };
 
   const ids = { reviewer: `${uid}-reviewer`, comment: `${uid}-comment`, help: `${uid}-help`, err: `${uid}-err` };
-  const showForm = status !== "approved";
+  const showForm = status !== "approved" || unconfirmed;
   const failureErrors = Array.isArray(failure?.details?.errors) ? (failure.details.errors as string[]) : [];
 
   return (
@@ -139,11 +156,26 @@ export function ApprovalPanel({
         <h2 id="approval-title" className="flex items-center gap-2 text-lg font-semibold">
           <UserCheck aria-hidden className="size-5" /> Editorial approval (G1)
         </h2>
-        <StatusBadge presentation={approvalPresentation(status)} prefix="Engine approval status" />
+        <StatusBadge presentation={approvalPresentation(status, draft.approval_confirmed)} prefix="Engine approval status" />
       </div>
 
       {/* Engine-recorded approval, current or stale. */}
-      {record && (status === "approved" || status === "stale") ? (
+      {record && unconfirmed ? (
+        <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+          <p className="font-medium">
+            <AlertTriangle aria-hidden className="mr-1 inline size-4 text-warning" />
+            Unconfirmed approval by {record.reviewer ?? "unknown"}
+            {record.approved_at ? ` on ${formatDateTime(record.approved_at)}` : ""}.
+          </p>
+          <p className="mt-1">
+            The engine reports this draft as approved, but a file changed while the approval was being recorded, so it
+            does not match the version that was validated. Review the current draft, then approve it to confirm this
+            version.
+          </p>
+        </div>
+      ) : null}
+
+      {record && !unconfirmed && (status === "approved" || status === "stale") ? (
         <div
           className={
             status === "approved"
@@ -254,7 +286,7 @@ export function ApprovalPanel({
                   ))}
                 </ul>
               ) : null}
-              {failure.code === "draft_changed" ? (
+              {failure.code === "draft_changed" || failure.code === "approval_unconfirmed" ? (
                 <Button type="button" variant="outline" size="sm" onClick={onValidate} disabled={validating}>
                   <RefreshCw aria-hidden /> Load the latest draft
                 </Button>

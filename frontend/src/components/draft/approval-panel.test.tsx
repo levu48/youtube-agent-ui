@@ -7,6 +7,9 @@ import type { DraftCheck, DraftView } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { mockFetch, renderWithQuery } from "@/test/utils";
 
+const toast = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock("sonner", () => ({ toast }));
+
 const TOKEN = "a".repeat(64);
 
 function check(over: Partial<DraftCheck> = {}): DraftCheck {
@@ -54,7 +57,16 @@ function setup(d: DraftView, routes: Parameters<typeof mockFetch>[0] = {}) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.clearAllMocks();
 });
+
+async function approveAs(name = "B") {
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText(/Reviewer name/), name);
+  await user.click(screen.getByRole("button", { name: /Approve Editorial Draft/ }));
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Approve draft" }));
+  return user;
+}
 
 describe("approvalBlocker", () => {
   it("explains every reason approval is unavailable", () => {
@@ -63,6 +75,8 @@ describe("approvalBlocker", () => {
     expect(approvalBlocker(draft({ draft_check: null }))).toMatch(/could not be run/);
     expect(approvalBlocker(draft({ draft_check: check({ ok: false, errors: ["x"] }) }))).toMatch(/has errors/);
     expect(approvalBlocker(draft({ review_token: null }))).toMatch(/Validate it again/);
+    const reason = "The engine report does not cover script.json.";
+    expect(approvalBlocker(draft({ review_token: null, review_token_reason: reason }))).toBe(reason);
   });
 });
 
@@ -209,5 +223,45 @@ describe("ApprovalPanel", () => {
     await user.click(screen.getByRole("button", { name: /Approve Editorial Draft/ }));
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Approve draft" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/approved a slightly different version/);
+    // Mismatch takes precedence: no success toast even though the engine reports "approved".
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/does not match the version you validated/));
+  });
+
+  it("treats an unconfirmed approval (409) as a failure, never a success", async () => {
+    const { onValidate } = setup(draft(), {
+      "POST /projects/p1/draft/approve": () => ({
+        status: 409,
+        json: {
+          error: {
+            code: "approval_unconfirmed",
+            message: "The engine recorded an approval, but a file changed while it was being approved.",
+            details: { approval_status: "approved" },
+          },
+        },
+      }),
+    });
+    const user = await approveAs();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/a file changed while it was being approved/);
+    expect(toast.success).not.toHaveBeenCalled();
+    await user.click(within(alert).getByRole("button", { name: /Load the latest draft/ }));
+    expect(onValidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("never presents an unconfirmed engine approval as approved", () => {
+    setup(
+      draft({
+        draft_check: check({ approval_status: "approved" }),
+        approval: approvedRecord,
+        approval_confirmed: false,
+      }),
+    );
+    expect(screen.getByText("G1 approval unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("G1 approved")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Approved by/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Unconfirmed approval by Nguyễn Văn A/)).toBeInTheDocument();
+    // The reviewer can confirm the current version by approving it.
+    expect(screen.getByRole("button", { name: /Approve Editorial Draft/ })).toBeEnabled();
   });
 });

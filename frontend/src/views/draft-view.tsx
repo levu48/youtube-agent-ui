@@ -54,7 +54,10 @@ export function DraftView() {
               <Eye aria-hidden className="size-3.5" /> Read-only
             </span>
             {d?.draft_check ? (
-              <StatusBadge presentation={approvalPresentation(d.draft_check.approval_status)} prefix="Engine approval status" />
+              <StatusBadge
+                presentation={approvalPresentation(d.draft_check.approval_status, d.approval_confirmed)}
+                prefix="Engine approval status"
+              />
             ) : null}
           </span>
         }
