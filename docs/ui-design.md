@@ -165,6 +165,38 @@ Implemented before editing, which waits for an engine edit command (see `milesto
   - "Check the draft" when the engine reports the draft is invalid.
 - **Never:** approval doesn't start research or any other stage, and the UI never writes `review.json`.
 
+### 4.6 Milestone 2: the draft editor (`/projects/[id]/draft`)
+The M1 viewer becomes the editorial workspace. The workspace's **Edit Draft** button opens it.
+- **Header:**
+  - badges `Editable` (or `Read-only` when the engine does not allow an edit), `Unsaved changes` and the engine's G1 status;
+  - actions `Back to Project`, `Discard` (only with unsaved edits), `Save`, `Validate Draft` and `Copy text`.
+  - When Save is disabled, its description gives the reason: no edits, a field problem, or the engine's reason.
+- **Tabs** `Outline`, `Script`, `Validation`:
+  - ARIA tabs, with arrow, Home and End keys.
+  - A tab's label shows how many sections have unsaved edits ("Outline (2 unsaved)"), and Validation shows the engine's error count.
+- **Outline and Script:**
+  - A section navigator (28%), with an `Edited` marker on changed sections, beside the selected section's form (72%). Below 1024px they stack.
+  - The outline adds a "Title and question" entry.
+  - Fields:
+    - Outline: title and central question; per section heading, purpose, key points and claims to investigate.
+    - Script: heading, narration (large, `lang` of the draft), summary and editorial notes.
+    - List fields take one item per line.
+  - Every field has a label, an `Unsaved` marker when changed, a character count against the engine's limit, and an inline error tied to it with `aria-describedby`.
+  - Section ID, role, timing and spoken units are read-only; the engine recalculates them on save. Review flags set by the engine are shown under the script fields.
+  - The Script tab also offers `Full script` (formatted) and `Markdown view` (the engine's `script.md`). Both show the saved draft, and say so while there are unsaved edits.
+- **Unsaved state:**
+  - Edits are kept against the version loaded when editing started. Validating again does not drop them, and an alert warns if the engine's draft changed meanwhile.
+  - Leaving the page (reload, close, or an in-app link) asks first. Browser Back inside the app cannot be intercepted by the App Router.
+  - Approval is not offered while edits are unsaved: the approval panel says so, and the button is disabled.
+- **Save:**
+  - Shows a pending label while saving.
+  - Afterwards the page shows the engine's draft. A status line lists the files the engine changed, the storyboard sections it re-split and the visual briefs to check. A toast warns if the save made the G1 approval out of date.
+  - Errors from the engine (field locations, downstream work, refusals) appear in an alert, and the edits stay.
+- **Conflict dialog** "The draft changed since you loaded it":
+  - It shows the unsaved edits as plain text in a read-only box, with `Copy my edits` (clipboard, or select the text by hand), `Keep editing` and `Reload latest`.
+  - Only `Reload latest` drops the edits. Nothing is ever overwritten or retried automatically.
+- **Discard** asks for confirmation.
+
 ## 5. Components and design contracts
 
 Implement reusable components:

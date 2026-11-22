@@ -171,3 +171,58 @@ Clarifications:
 | `engine_*` | 502 | any other engine exit, with its redacted `error:` line |
 
 While a draft-approve call is in progress, `POST /projects/{id}/draft-jobs` returns `409 project_busy`.
+
+## Milestone 2: editing the outline and script
+
+Editing needs an engine with `draft-edit` (D-117, the pinned `ENGINE_REF` `573ebdd` or later). The UI never writes a draft file. Each save is one `ytagent draft-edit` run: the patch goes on the engine's stdin, and the engine checks the revision, validates, regenerates the Markdown views and storyboard scenes, and publishes atomically.
+
+**`GET /projects/{id}/draft/editable`** returns everything `GET /projects/{id}/draft` returns, plus `editing`. The draft page loads this, and its **Validate Draft** action calls it again.
+
+```json
+"editing": {
+  "supported": true,
+  "can_edit": true,
+  "revision": "<64-hex engine revision>",
+  "reason": null,
+  "reason_code": null,
+  "paths": [],
+  "limits": { "title": 300, "thesis_or_question": 2000, "heading": 300, "purpose": 2000, "key_point": 1000,
+              "key_points": 50, "claims_to_investigate": 50, "narration": 50000, "summary": 2000,
+              "editorial_note": 2000, "editorial_notes": 50 }
+}
+```
+- `supported` is false when the engine reports no draft revision (`reason_code: engine_unsupported`).
+- `can_edit` comes from an engine dry run of a no-op patch. When it is false, `reason` gives the engine's explanation, and `reason_code` is one of `no_draft`, `job_conflict`, `downstream_artifacts` (with `paths`), `edit_refused` (the draft already has errors), `check_unavailable`, `engine_timeout`, or an engine error code.
+
+**`POST /projects/{id}/draft/edit`** (CSRF) saves one atomic edit of the outline and/or script.
+
+```json
+{
+  "expected_revision": "<editing.revision when the editor loaded>",
+  "dry_run": false,
+  "outline": { "title": "…", "thesis_or_question": "…",
+               "sections": [ { "id": "sec-02", "heading": "…", "purpose": "…", "key_points": ["…"], "claims_to_investigate": [] } ] },
+  "script":  { "sections": [ { "outline_section_id": "sec-02", "heading": "…", "narration": "…", "summary": "", "editorial_notes": [] } ] }
+}
+```
+- Send only changed fields: omit a field to keep it. `null`, unknown fields, wrong types, bad section IDs and over-limit values get 422, and the engine is not run. The serialised patch is limited to 1 MiB, the engine's own limit.
+- One request instead of the proposed separate `PUT …/outline` and `PUT …/script`: an edit that touches both is published as one engine generation, under one revision check.
+- The project is held during the call. A draft job cannot start (`409 project_busy`), and an active job refuses the edit (`409 job_conflict`).
+- **200:** `{ "result": {status, dry_run, previous_revision, revision, changed_files, human_edited, storyboard, check, approval_status, approval_changed}, "draft": <editable view after the save> }`.
+  - `status` is `published`, `already_current` or `would_publish`.
+  - `draft` is omitted for a dry run.
+  - The engine's absolute `project_root` and `files` are not returned.
+
+| Code | HTTP | Cause |
+|---|---|---|
+| `revision_conflict` | 409 | the draft changed since `expected_revision` (another save, the CLI, a job). Nothing was written; `details.current_revision` gives the new revision. The UI never retries or overwrites. |
+| `downstream_artifacts` | 409 | later-stage work depends on the draft (`details.paths`); edit it in the CLI's way instead |
+| `engine_conflict` | 409 | the engine's lock is held |
+| `unresolved_publication` | 409 | an interrupted engine write must be resolved in the CLI first |
+| `job_conflict` / `project_busy` | 409 | a job is active, or another save or approval is running |
+| `invalid_edit` | 422 | the engine rejected the patch (`details.errors[{loc, msg}]`, for example an unknown section) |
+| `edit_refused` | 422 | the engine refused: the draft has errors, or a hand-edited view would be overwritten (`details.errors`) |
+| `validation_error` | 422 | request validation (field errors), or the patch is larger than 1 MiB |
+| `engine_unavailable` / `engine_timeout` | 503 / 504 | as for other engine calls. After a timeout, reload before editing again. |
+
+**Approval and editing.** Any saved edit makes an existing approval `stale`, by the engine's rule. With this engine, approval sends the engine `revision` as `--expect-revision`, so the engine itself refuses to approve a version other than the one validated. The browser does not offer approval while edits are unsaved, and the server checks the revision.

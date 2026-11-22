@@ -1,11 +1,24 @@
-# Milestone 2 — Verification Record (in progress)
+# Milestone 2 — Verification Record
 
-**Status:** first part only, validation and G1 approval (`feat/m2-review-approve`). Browser editing of the outline and script is **not** implemented. It needs the engine edit command proposed in a separate engine PR, so M2 is not complete.
+**Status:** implemented and awaiting review. Two UI PRs and one engine PR:
+1. Validation and G1 approval: UI PR #3, merged.
+2. The engine edit command: `youtube-agent` PR #11, merged as `573ebdd`.
+3. The browser editor: `feat/m2-draft-editor`, this PR.
 
-**Date:** 2026-11-21. **Machine:** macOS on Apple Silicon, uv 0.13.6, Node 26.13, Python 3.12.16.
-**Engine tested:** `youtube-agent` @ `d1325c44ac04e0495f4bc42976d3058cd4d43467` (`ytagent 0.1.0`, unchanged `ENGINE_REF`), as a read-only clone. The engine repository was not modified by this PR.
+**Dates:** 2026-11-21 (part 1) and 2026-11-22 (editor). **Machine:** macOS on Apple Silicon, uv 0.13.6, Node 26.13, Python 3.12.16.
+**Engine tested:** `youtube-agent` @ `573ebddd8513f63c5afc5e73a0200b84cccdd9de` (`ytagent 0.1.0`), now pinned in `ENGINE_REF`, as a fresh clone. Part 1 was verified at `d1325c4`, the previous pin. The UI PRs do not modify the engine repository.
 
-## What this part delivers
+## The editor (this PR)
+- `GET /projects/{id}/draft/editable` returns the draft view plus `editing`: the engine revision, whether an edit is allowed now (an engine dry run), the reason when it is not, and the field limits.
+- `POST /projects/{id}/draft/edit` runs `ytagent draft-edit --expect-revision=<rev> --json [--dry-run]`, with the validated patch on stdin. It needs CSRF and is refused during jobs. A stale revision is 409 `revision_conflict` and nothing is written. Responses never include absolute paths.
+- Draft page:
+  - tabs Outline / Script / Validation, each with a section navigator and a form for the selected section;
+  - unsaved markers, Save / Discard, and a warning before leaving the page;
+  - a conflict dialog with Copy my edits / Reload latest;
+  - approval disabled while edits are unsaved.
+- `ENGINE_REF` is bumped to `573ebdd`. The required real-engine script now expects at least 5 integration tests and 12 E2E passes.
+
+## Part 1: validation and approval
 - `POST /projects/{id}/draft/approve` runs `ytagent draft-approve --reviewer=<name> [--comment=…]` from the allowlist, adding `--expect-revision=<rev> --json` when the engine supports a draft revision.
   - It needs CSRF and explicit confirmation.
   - It is refused while a job is active, and also refused when the reviewed files changed since the reviewer's last validation, using the review token.
@@ -23,15 +36,40 @@
 | Suite | Command | Result |
 |---|---|---|
 | Backend lint | `cd backend && uv run ruff check . && uv run ruff format --check .` | pass |
-| Backend unit + integration | `cd backend && uv run pytest` | 169 passed (M1: 115). Adds 28 approval API tests, 23 report-verification tests and 2 argv tests; 4 real-engine integration tests. |
+| Backend unit + integration | `cd backend && uv run pytest` | 206 passed (M1: 115). Adds 28 approval API tests, 23 report-verification tests, 34 edit API tests and 4 adapter tests (argv, stdin); 5 real-engine integration tests. |
 | Frontend lint, types, build | `cd frontend && npm run lint && npm run typecheck && npm run build` | pass |
-| Frontend component/unit tests | `cd frontend && npm test` | 42 passed (M1: 27). Adds 12 approval panel tests and 3 status-mapping tests. |
-| E2E, real engine | `E2E_ENGINE=real npm run test:e2e` | 11 passed, 1 skipped (the slow-job cancel test, by design) |
-| E2E, fake engine | `E2E_ENGINE=fake npm run test:e2e` | 12 passed |
-| Required real-engine script | `ENGINE_DIR=<clone at ENGINE_REF> scripts/test-real-engine.sh` | engine at `ENGINE_REF`; integration 4 tests, 0 skipped, 0 failed; E2E 11 passed, 1 allowed skip. The minimums were raised to 4 and 11 so the new tests must run. |
+| Frontend component/unit tests | `cd frontend && npm test` | 58 passed (M1: 27). Adds 12 approval panel tests, 3 status-mapping tests, 7 editing-logic tests and 9 editor workspace tests. |
+| E2E, real engine | `E2E_ENGINE=real npm run test:e2e` | 12 passed, 1 skipped (the slow-job cancel test, by design) |
+| E2E, fake engine | `E2E_ENGINE=fake npm run test:e2e` | 13 passed |
+| Required real-engine script | `ENGINE_DIR=<clone at ENGINE_REF> scripts/test-real-engine.sh` | engine at `573ebdd`; integration 5 tests, 0 skipped, 0 failed; E2E 12 passed, 1 allowed skip. Minimums raised to 5 and 12. |
 | Real-engine integration, engine PR #11 | `YTA_TEST_ENGINE_REPO=<clone of youtube-agent feat/draft-edit @ 67e2876> YTA_REQUIRE_ENGINE=1 uv run pytest tests/integration` | 4 passed; the G1 test runs in engine-revision mode (`review_mode: engine`, `--expect-revision`). Extra evidence only: `ENGINE_REF` is unchanged. |
 
-Coverage of the M2-02 and M2-04 test lists:
+Coverage of the M2-01, M2-02 and M2-03 editing tests:
+- **Real engine** (`test_browser_edit_with_real_engine`, `573ebdd`):
+  - a Vietnamese outline and script edit in one save (NFC round trip, `script.md` regenerated, storyboard re-split);
+  - the CLI `draft-check` revision matches the UI;
+  - a stale revision gets 409 with nothing written;
+  - an unknown section ID gets 422 `invalid_edit` with its location;
+  - a dry run writes nothing;
+  - the approval becomes `stale` after the edit and is approved again via `--expect-revision`;
+  - regeneration protection: a later Generate Draft job fails with exit 2, and the edits are untouched;
+  - downstream work (`research-plan.json`) turns editing off, with the path shown.
+- **Engine ordering (fake engine mirroring D-117):**
+  - a change racing into the engine is refused (409, nothing written);
+  - the engine lock gives 409 `engine_conflict`;
+  - an active job gives 409, and a job cannot start during an edit;
+  - an engine that has no revision reports `engine_unsupported`;
+  - timeout gives 504 and releases the project; engine unavailable gives 503 without leaking paths.
+- **Request safety:** 16 malformed requests get 422 without running the engine: null fields, unknown fields such as `project_root`, a traversal section ID, limits, control characters, wrong types and a bad revision. A patch over 1 MiB is rejected before the engine. Missing CSRF or a foreign origin gets 403. The patch travels only on stdin; the argv carries the root, the revision, `--json` and `--dry-run`, and never user text.
+- **UI:**
+  - Component tests: only the changed fields are sent; unsaved markers and tab counts; approval blocked while unsaved; Vietnamese narration with `lang="vi"`; field errors are described and block Save, with the reason as its description.
+  - Component tests: the conflict dialog copies the edits, keeps them on "Keep editing", and drops them only on "Reload latest"; read-only with the engine's reason and paths; discard needs confirmation; engine error locations are listed; arrow keys move between tabs; `beforeunload` when dirty.
+  - E2E (both engines): edit outline, edit Vietnamese script, save, reload, approve, edit again (stale), then an outside change produces the conflict dialog: Keep editing, then Reload latest. Axe runs on the editor, with unsaved edits, and with the conflict dialog open. The responsive and 200%-zoom checks include the editor.
+- **Found while testing:**
+  - Typing a space that briefly made a field equal to the saved text reset the raw input; the editor now keeps it.
+  - The approved panel did not mention unsaved edits; it now says the approval covers only the saved draft.
+
+Coverage of the M2-02 and M2-04 approval test lists:
 - **CSRF and origin.** A wrong token or a foreign origin gets 403, and the engine is not invoked.
 - **Validation and confirmation.** These are rejected with 422 without running the engine: a missing, blank, multi-line, over-long or control-character reviewer name; an over-long comment; a missing or false `confirm`; a malformed token; unknown fields.
 - **Path confinement.** An unknown project gets 404. Project paths come only from the validated slug, as in M1.
@@ -78,17 +116,18 @@ Coverage of the M2-02 and M2-04 test lists:
 
 **Found while testing:** axe flagged the dialog's scrollable list of blockers as not keyboard-reachable (`scrollable-region-focusable`). The list is now focusable and labelled.
 
-## Not yet done (blocks M2 completion)
-- **Editing** the outline and script: the M2-01 engine edit contract, then the M2-03 editor (unsaved state, save, conflict dialog). It needs the engine `draft-edit` command and `draft-approve --expect-revision`, proposed in a separate engine PR. Once that PR is merged, bump `ENGINE_REF`.
-- **Tabs (Outline / Script / Validation)** in the draft workspace come with the editor. This part keeps the M1 layout and adds the validation and approval panels.
-- **Closing the approval race needs the engine PR.** With `ENGINE_REF` at `d1325c4`, a file can still change between the UI's check and the engine's snapshot. The engine then records an approval the UI did not confirm. The UI no longer treats that as success: it answers 409, shows "unconfirmed", and keeps the form. It cannot undo the engine's record, and the engine's own stage status (workspace stepper) still says completed. Bumping `ENGINE_REF` to an engine with D-117 prevents the case; the UI already uses `--expect-revision` when it is available.
+## Known limitations
+- **Browser Back** inside the app is not intercepted (App Router limitation). Reload, close and in-app links do ask first.
+- **Crash recovery** of an interrupted engine publication is tested in the engine (D-117), not driven from the UI. The UI reports `unresolved_publication` and leaves it to the CLI.
+- **Regenerating text after an edit** is deliberately not offered: the UI never passes `--replace-edits`.
+- **Approval race with an older engine.** With the pinned engine, approval always uses `--expect-revision`, so the engine prevents the race. The UI-token fallback (409 `approval_unconfirmed`) remains only for engines older than D-117, where editing is also off.
 
 ## Definition of done (milestone-2.md), current state
-- [ ] A verified safe engine edit interface exists and is documented. It is proposed in an engine PR and not yet merged.
-- [ ] The browser can edit and save permitted fields without writing engine files directly.
-- [ ] Edits preserve IDs, artifact consistency, human edit protection and optimistic concurrency.
+- [x] A verified safe engine edit interface exists and is documented: `draft-edit` (D-117, engine PR #11, `573ebdd`), recorded in `engine-compatibility.md`.
+- [x] The browser can edit and save permitted fields without writing engine files directly.
+- [x] Edits preserve IDs, artifact consistency, human edit protection and optimistic concurrency. The engine enforces all of these, and the real-engine tests check them.
 - [x] Real draft-check output is visible, with actionable errors and warnings.
 - [x] A named reviewer can explicitly approve G1 through the engine.
 - [x] Approval becomes stale after changes to bound files and never appears falsely current.
 - [x] M1 flows remain functional; all automated tests and the pinned real-engine script pass.
-- [ ] PR reviewed, with no automatic merge. A draft PR is open.
+- [ ] PR reviewed, with no automatic merge. A draft PR is open for the editor.
