@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -11,16 +12,27 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app import __version__
-from app.artifacts import draft_files_present, read_draft
+from app.artifacts import (
+    draft_files_present,
+    engine_revision,
+    read_draft,
+    read_review,
+    record_digest,
+    review_token,
+    reviewed_hashes,
+    verify_report,
+)
 from app.config import home_relative
 from app.engine import commands
-from app.engine.public_errors import to_public
+from app.engine.errors import redact
+from app.engine.public_errors import MAX_ENGINE_MESSAGE, to_public
 from app.errors import ApiError
 from app.ollama import model_installed, ollama_info
 from app.projects import ProjectRow, read_input
 from app.schemas import (
     TERMINAL_STATUSES,
     DiscoveredProject,
+    DraftApprove,
     DraftJobCreate,
     EngineInfo,
     Health,
@@ -181,20 +193,241 @@ async def project_draft_check(project_id: str, s: State) -> dict:
         raise ApiError(pe.status, pe.code, pe.message) from None
 
 
+@dataclass
+class _Review:
+    """One validation of the draft: the engine report plus what the reviewer may approve.
+
+    ``mode`` is ``engine`` when the engine reports its own draft ``revision`` (engine D-117):
+    the token *is* that revision and the engine checks it under its lock when approving.
+    Otherwise (``ui``, engine @ d1325c4) the token is a UI hash of the reviewed files, issued
+    only when the engine's report verifiably describes those exact bytes."""
+
+    check: dict | None = None
+    error: dict | None = None
+    token: str | None = None
+    reason: str | None = None
+    mode: str | None = None
+    error_status: int = 502
+    hashes: dict[str, str | None] = field(default_factory=dict)
+
+
+_RETRY_REASON = "The draft changed while it was being checked. Validate it again."
+
+
+async def _checked(s: AppState, root) -> _Review:
+    """Run the engine's draft-check and derive the review token for the same file contents."""
+    out = _Review()
+    for _ in range(2):
+        try:
+            before = reviewed_hashes(root)
+        except OSError:
+            before = None
+        try:
+            out.check, out.error = await s.engine.draft_check(root), None
+        except Exception as exc:
+            pe = to_public(exc, operation="draft-check")
+            return _Review(error=pe.as_dict(), error_status=pe.status)
+        rev = engine_revision(out.check)
+        if rev is not None:
+            out.mode, out.reason = "engine", None
+            out.token = rev if out.check.get("ok") is True else None
+            if out.token is None:
+                out.reason = "The engine check did not pass."
+            return out
+        out.mode = "ui"
+        try:
+            after = reviewed_hashes(root)
+        except OSError:
+            after = None
+        if before is None or before != after:
+            out.reason = _RETRY_REASON
+            continue
+        out.hashes = after
+        out.reason = verify_report(out.check, after)
+        out.token = review_token(after) if out.reason is None else None
+        break
+    return out
+
+
+def _approval_view(s: AppState, row: ProjectRow, review: _Review, record: dict | None) -> dict:
+    """``approval_confirmed`` is False when the engine's current approval is one the UI could
+    not confirm covers the version the reviewer validated; None when nothing is approved."""
+    approved = bool(review.check) and review.check.get("approval_status") == "approved"
+    if not approved:
+        return {"approval_confirmed": None}
+    unconfirmed = s.approvals.is_unconfirmed(row.id, record_digest(record))
+    return {"approval_confirmed": not unconfirmed}
+
+
 @router.get("/projects/{project_id}/draft")
 async def project_draft(project_id: str, s: State) -> dict:
-    """Artifacts plus the engine's draft-check. A failed check is reported with the same
-    sanitized ``{code, message}`` as ``/draft-check`` would return, never a raw exception."""
+    """Artifacts, the engine's draft-check, the engine's review record and a review token.
+
+    A failed check is reported with the same sanitized ``{code, message}`` as
+    ``/draft-check`` would return, never a raw exception. Every call runs draft-check again,
+    so this is also the "Validate draft" action."""
     row = s.projects.require(project_id)
     root = s.projects.confined_root(row)
     out = read_draft(root)
-    try:
-        out["draft_check"] = await s.engine.draft_check(root)
-        out["draft_check_error"] = None
-    except Exception as exc:
-        out["draft_check"] = None
-        out["draft_check_error"] = to_public(exc, operation="draft-check").as_dict()
+    review = await _checked(s, root)
+    record = read_review(root)
+    out["draft_check"] = review.check
+    out["draft_check_error"] = review.error
+    out["review_token"] = review.token
+    out["review_token_reason"] = None if review.token else review.reason
+    out["review_mode"] = review.mode
+    out["approval"] = record
+    out.update(_approval_view(s, row, review, record))
+    active = s.jobs.active_for(row.id)
+    out["active_job_id"] = active.id if active else None
     return out
+
+
+_DRAFT_CHANGED = (
+    "The draft changed after you last validated it. Review the latest version, then approve again."
+)
+
+
+def _engine_json_error(res) -> dict:
+    try:
+        data = json.loads(res.stdout)
+    except ValueError:
+        return {}
+    err = data.get("error") if isinstance(data, dict) else None
+    return err if isinstance(err, dict) else {}
+
+
+def _approve_failure(res) -> ApiError:
+    """Map a non-zero draft-approve exit to a public error (redacted engine message)."""
+    jerr = _engine_json_error(res)
+    if jerr.get("code") == "revision_mismatch":
+        return ApiError(409, "draft_changed", _DRAFT_CHANGED)
+    text = redact(str(jerr.get("message") or "")) if jerr else redact(res.stderr)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    msg = next((ln.removeprefix("error:").strip() for ln in lines if not ln.startswith("- ")), "")
+    msg = msg[:MAX_ENGINE_MESSAGE]
+    if res.exit_code == 2:
+        errors = [ln.removeprefix("- ").strip() for ln in lines if ln.startswith("- ")][:50]
+        return ApiError(
+            422,
+            "approval_refused",
+            f"The engine refused the approval: {msg}" if msg else "The engine refused it.",
+            {"errors": errors},
+        )
+    if res.exit_code == 9:
+        return ApiError(
+            409,
+            "engine_conflict",
+            "Another engine run is using this project. Try again when it has finished.",
+        )
+    code = res.classification.code
+    return ApiError(
+        502, code, f"The engine reported an error: {msg}" if msg else res.classification.summary
+    )
+
+
+@router.post("/projects/{project_id}/draft/approve")
+async def approve_draft(project_id: str, body: DraftApprove, s: State) -> dict:
+    """Record G1 editorial approval through ``ytagent draft-approve``.
+
+    Refused while a job is active (409 ``job_conflict``) or when the reviewed files changed
+    since the reviewer's last validation (409 ``draft_changed``). With an engine that reports
+    a draft revision, the engine enforces that check itself under its lock
+    (``--expect-revision``). Otherwise, an approval the UI cannot confirm covers the validated
+    version is recorded as unconfirmed and answered with 409 ``approval_unconfirmed``, never
+    as success. The response reports the engine's state after the command."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    with s.jobs.exclusive(row.id):
+        pre = await _checked(s, root)
+        if pre.check is None:
+            err = pre.error or {}
+            raise ApiError(
+                pre.error_status,
+                err.get("code", "engine_error"),
+                err.get("message", "The engine check could not be run."),
+            )
+        # A failing check goes to the engine, which refuses with its own error list.
+        if pre.check.get("ok") is True:
+            if pre.token is None and pre.reason != _RETRY_REASON:
+                raise ApiError(
+                    422, "draft_unverifiable", pre.reason or "The draft cannot be verified."
+                )
+            if pre.token != body.review_token:
+                raise ApiError(409, "draft_changed", _DRAFT_CHANGED)
+        engine_mode = pre.mode == "engine"
+        try:
+            res = await s.engine.draft_approve(
+                root,
+                reviewer=body.reviewer,
+                comment=body.comment,
+                expect_revision=body.review_token if engine_mode else None,
+            )
+        except commands.ArgumentError as exc:
+            raise ApiError(422, "validation_error", str(exc)) from None
+        except Exception as exc:
+            pe = to_public(exc, operation="draft-approve")
+            raise ApiError(pe.status, pe.code, pe.message) from None
+        finally:
+            s.engine.invalidate(row.id)
+            s.projects.touch(row.id)
+        if res.timed_out:
+            raise ApiError(
+                504,
+                "engine_timeout",
+                "The engine did not finish the approval in time. Reload to see whether it "
+                "was recorded.",
+            )
+        if res.exit_code != 0:
+            raise _approve_failure(res)
+
+        record = read_review(root)
+        if engine_mode:
+            try:
+                data = json.loads(res.stdout)
+            except ValueError:
+                data = {}
+            already = bool(isinstance(data, dict) and data.get("already_approved"))
+            # The engine compared the revision on the snapshot it approved.
+            matches = (
+                isinstance(data, dict)
+                and data.get("ok") is True
+                and data.get("revision") == body.review_token
+            )
+        else:
+            already = res.stdout.lstrip().startswith("already approved")
+            # The engine (d1325c4) approves its own snapshot; confirm it is the validated one.
+            validated = {k: v for k, v in pre.hashes.items() if v}
+            matches = bool(record) and record.get("artifacts") == validated
+        digest = record_digest(record)
+        if matches:
+            s.approvals.clear(row.id)
+        elif digest is not None:
+            s.approvals.mark_unconfirmed(row.id, digest)
+
+    review = await _checked(s, root)
+    status = (await _status(s, row, fresh=True)).model_dump()
+    if not matches:
+        raise ApiError(
+            409,
+            "approval_unconfirmed",
+            "The engine recorded an approval, but a file changed while it was being approved, "
+            "so it does not match the version you validated. It is not shown as your approval. "
+            "Validate the draft, review the current version, and approve it again.",
+            {"approval_status": (review.check or {}).get("approval_status")},
+        )
+    return {
+        "already_approved": already,
+        "approved_version_matches": True,
+        "approval": record,
+        "approval_confirmed": True,
+        "draft_check": review.check,
+        "draft_check_error": review.error,
+        "review_token": review.token,
+        "review_token_reason": None if review.token else review.reason,
+        "review_mode": review.mode,
+        "status": status,
+    }
 
 
 @router.get("/projects/{project_id}/draft-available")

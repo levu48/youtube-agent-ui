@@ -21,6 +21,8 @@ import signal
 import subprocess
 import uuid
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,6 +85,8 @@ class JobManager:
         self._wake = asyncio.Event()
         self._worker: asyncio.Task | None = None
         self._stopping = False
+        # Projects held by a short engine mutation (e.g. draft-approve) outside the job queue.
+        self._reserved: set[str] = set()
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -138,6 +142,10 @@ class JobManager:
 
     def submit(self, project_id: str, job_type: str, args: list[str], meta: dict) -> JobOut:
         commands.assert_allowlisted(args)
+        if project_id in self._reserved:
+            raise ApiError(
+                409, "project_busy", "This project is being approved. Try again in a moment."
+            )
         job_id = str(uuid.uuid4())
         now = utcnow()
         payload = json.dumps({"args": args, **meta})
@@ -169,6 +177,27 @@ class JobManager:
         self._emit(job_id, "status", {"status": "queued", "message": "Waiting to start"})
         self._wake.set()
         return self.get(job_id)
+
+    @contextmanager
+    def exclusive(self, project_id: str) -> Iterator[None]:
+        """Hold a project for a short engine mutation: refused while a job is queued or
+        running, and no job can be submitted until it is released. (The engine's own lock
+        still guards against CLI runs outside the UI.)"""
+        if project_id in self._reserved:
+            raise ApiError(409, "project_busy", "Another action on this project is in progress.")
+        active = self.active_for(project_id)
+        if active:
+            raise ApiError(
+                409,
+                "job_conflict",
+                "A draft job is queued or running for this project. Wait for it to finish.",
+                {"job_id": active.id},
+            )
+        self._reserved.add(project_id)
+        try:
+            yield
+        finally:
+            self._reserved.discard(project_id)
 
     def _row(self, job_id: str):
         try:

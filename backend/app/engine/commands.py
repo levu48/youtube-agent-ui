@@ -1,6 +1,6 @@
 """Allowlisted argv builders for the engine CLI.
 
-Only five operations exist. Every free-text value is validated and passed as a single
+Only six operations exist. Every free-text value is validated and passed as a single
 ``--option=value`` argv element, so a value can never be parsed as another flag, and argv is
 never handed to a shell. Force/replace/paid options are not representable here.
 """
@@ -21,7 +21,15 @@ PROVIDERS = ("ollama", "fixture")
 FROM_STAGES = ("outline", "script", "storyboard")
 MIN_DURATION, MAX_DURATION = 60, 3600
 
-FIELD_LIMITS = {"idea": (5, 2000), "audience": (0, 500), "tone": (0, 200), "guidance": (0, 4000)}
+FIELD_LIMITS = {
+    "idea": (5, 2000),
+    "audience": (0, 500),
+    "tone": (0, 200),
+    "guidance": (0, 4000),
+    # Engine ReviewRecord limits (models.py): reviewer 1-200, comment <= 2000.
+    "reviewer": (1, 200),
+    "comment": (0, 2000),
+}
 
 
 class EngineOp(StrEnum):
@@ -30,6 +38,7 @@ class EngineOp(StrEnum):
     DRAFT = "draft"
     PRODUCTION_STATUS = "production-status"
     DRAFT_CHECK = "draft-check"
+    DRAFT_APPROVE = "draft-approve"
 
 
 class ArgumentError(ValueError):
@@ -127,6 +136,33 @@ def production_status_args(root: Path) -> list[str]:
 
 def draft_check_args(root: Path) -> list[str]:
     return [EngineOp.DRAFT_CHECK.value, _root(root), "--json"]
+
+
+def draft_approve_args(
+    root: Path,
+    *,
+    reviewer: str,
+    comment: str | None = None,
+    expect_revision: str | None = None,
+) -> list[str]:
+    """G1 approval. ``--reviewer`` is always explicit: the engine would otherwise fall back to
+    ``$YTA_REVIEWER`` or the OS user name.
+
+    With ``expect_revision`` (engines that report a draft ``revision``), the engine itself
+    refuses the approval unless its locked snapshot is still at that revision, and answers
+    in JSON."""
+    name = clean_text("reviewer", reviewer, required=True) or ""
+    if any(ch in name for ch in "\r\n\t"):
+        raise ArgumentError("reviewer must be a single line")
+    argv = [EngineOp.DRAFT_APPROVE.value, _root(root), f"--reviewer={name}"]
+    note = clean_text("comment", comment)
+    if note is not None:
+        argv.append(f"--comment={note}")
+    if expect_revision is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", expect_revision):
+            raise ArgumentError("expect_revision must be a 64-character hex revision")
+        argv += [f"--expect-revision={expect_revision}", "--json"]
+    return argv
 
 
 ALLOWED_SUBCOMMANDS = frozenset(op.value for op in EngineOp if op is not EngineOp.VERSION)

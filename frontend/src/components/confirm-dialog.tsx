@@ -27,6 +27,7 @@ export function ConfirmDialog({
   destructive,
   pending,
   onConfirm,
+  children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -37,6 +38,8 @@ export function ConfirmDialog({
   destructive?: boolean;
   pending?: boolean;
   onConfirm: () => void;
+  /** Extra content between the description and the buttons (e.g. a list). */
+  children?: React.ReactNode;
 }) {
   const returnTo = useRef<HTMLElement | null>(null);
   return (
@@ -57,6 +60,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
+        {children}
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline">{cancelLabel}</Button>

@@ -2,7 +2,9 @@
 
 Local-only web studio for the separate [`youtube-agent`](https://github.com/levu48/youtube-agent) documentary engine. It lets you create engine projects, generate drafts with your local Ollama model in the background, watch the engine's real output, and read the outline and script. The engine stays the source of truth: the UI only runs its CLI and reads documented artifacts.
 
-**Milestone 1 scope:** a dashboard, project creation, a project workspace (engine stages, next action, draft jobs, live logs, cancel), and a read-only draft viewer. It does not include editing, approvals, research, visuals, narration, rendering or publishing.
+**Milestone 1 scope:** a dashboard, project creation, a project workspace (engine stages, next action, draft jobs, live logs, cancel), and a read-only draft viewer.
+
+**Milestone 2 so far:** validate the draft and record editorial approval (G1) in the browser, through the engine's `draft-approve`. Editing the outline and script is not available yet; it needs an engine edit command first (see [milestone-2.md](docs/milestones/milestone-2.md)). Research, visuals, narration, rendering and publishing are not included.
 
 ```
 Browser ──► Next.js (127.0.0.1:3000) ──/api proxy──► FastAPI (127.0.0.1:8000) ──► uv run --no-sync ytagent …
@@ -35,7 +37,7 @@ Both servers bind to `127.0.0.1` only. Press Ctrl-C to stop both.
 | `YTA_DEFAULT_MODEL` | `qwen3:8b` | Model preselected in the UI. |
 | `YTA_ALLOW_FIXTURE_PROVIDER` | `false` | Shows the offline fixture provider, which writes placeholder text. For tests and demos only. |
 
-Projects created in the UI are ordinary engine projects. You can keep using them from the CLI:
+Projects created in the UI are ordinary engine projects. You can keep using them from the CLI, and approvals made in either place are the same engine record:
 
 ```bash
 cd ~/dev/youtube-agent
@@ -97,13 +99,14 @@ The checkout uses `persist-credentials: false`, so the token is not left on the 
 - **Jobs.** A draft request returns `202` with a job ID. Only one job can be queued or running per project. At most one job runs at a time across the studio; any others wait with the status `queued`. The engine's output lines are stored as numbered events and streamed over SSE. The page resumes with `Last-Event-ID` after a disconnect, and falls back to polling if streaming keeps failing. The UI never shows a progress percentage. With Ollama, the engine logs one line per model request, so you see real progress lines followed by the final summary.
 - **Cancel and timeouts.** Cancelling asks for confirmation. The backend signals the engine's whole process group: SIGINT (the engine exits cleanly with code 130), then SIGTERM, then SIGKILL after grace periods. The job shows `cancelled` only once every process in the group has exited, including descendants of the `uv` launcher. Short read-only commands that time out are stopped the same way, so nothing keeps writing after the UI reports the timeout.
 - **Restart.** If the backend restarts, any job it was running is marked `interrupted`; success is never assumed. If the engine process is still alive and its identity checks out, it is interrupted. Running a new draft lets the engine recover through its own journal.
+- **Approval (G1).** The draft page's **Approve Editorial Draft (G1)** runs `ytagent draft-approve --reviewer=<name>`. The backend refuses it while a job is active, or if the reviewed files changed since you last validated. Afterwards the page shows the engine's own state. Approval is editorial acceptance only: it does not verify claims, rights or release readiness, and it starts nothing. Any later change to the input, outline, script or storyboard makes the approval out of date, and the page says so.
 - **Statuses.** Engine stages (for example `Draft · Awaiting review`) and job statuses (`Succeeded`) are shown separately. Exit code 16 is treated as an expected human-review gate, not a crash.
 
 ## Security model
 
 - Loopback-only binding. The backend rejects any `Host` that isn't loopback and any `Origin` other than the UI.
 - Every state-changing request needs a per-process CSRF token from `/api/v1/session`. CORS is restricted to the UI origin.
-- Engine commands are built as argument lists from an allowlist of five operations: `--version`, `create`, `draft`, `production-status` and `draft-check`. Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
+- Engine commands are built as argument lists from an allowlist of six operations: `--version`, `create`, `draft`, `production-status`, `draft-check` and `draft-approve`. Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
 - The browser never supplies a filesystem path. Project folders are `<projects root>/<validated slug>` and are re-checked (no symlinks, still inside the root) right before each use. Artifacts are read only under fixed file names, with size limits and UTF-8 checks. Markdown is rendered without raw HTML.
 - Diagnostics are redacted (credentials, home directory) and truncated before they are stored or shown.
 
@@ -126,3 +129,4 @@ The checkout uses `persist-credentials: false`, so the token is not left on the 
 - [docs/ui-design.md](docs/ui-design.md): visual and interaction contract
 - [docs/milestones/](docs/milestones/): roadmap and Milestone 1 backlog
 - [docs/m1-verification.md](docs/m1-verification.md): Milestone 1 test record and known limitations
+- [docs/m2-verification.md](docs/m2-verification.md): Milestone 2 test record (validation and G1 approval so far)

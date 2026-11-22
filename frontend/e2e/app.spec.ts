@@ -1,3 +1,6 @@
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -112,15 +115,77 @@ test("draft viewer is read-only and renders Vietnamese", async ({ page }) => {
   await expect(script).toHaveAttribute("lang", "vi");
   await expect(script.getByRole("heading", { level: 3 }).first()).toContainText(/Câu hỏi đặt ra/);
   await expect(page.getByRole("heading", { name: "Validation (draft-check)" })).toBeVisible();
-  await expect(page.getByText(/Engine reports:/)).toContainText("Not approved");
-  // No editing or approval controls in M1.
-  await expect(page.getByRole("button", { name: /save|approve|edit/i })).toHaveCount(0);
-  await expect(page.locator("textarea")).toHaveCount(0);
+  await expect(page.getByText(/G1 approval, as reported by the engine:/)).toContainText("Not approved");
+  // The draft text itself is not editable yet (editing needs an engine edit command).
+  await expect(page.getByRole("button", { name: /\b(save|edit)\b/i })).toHaveCount(0);
+  await expect(page.locator("article textarea, article [contenteditable]")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Markdown view" }).click();
   await expect(page.locator(".prose-draft h1")).toBeVisible();
   await expect(page.locator(".prose-draft script")).toHaveCount(0);
   await axe(page);
+});
+
+/** A change made outside the UI (editor or CLI). Re-serialising whitespace keeps the draft
+ * valid, but changes the bytes the engine bound into the approval. */
+function touchStoryboardOutsideUi() {
+  appendFileSync(join(process.env.E2E_TMP!, "projects", "hcm-demo", "storyboard.draft.json"), "\n");
+}
+
+test("G1: validate and approve; a later change makes it stale; a changed draft is not approved blindly", async ({
+  page,
+}) => {
+  await page.goto("/projects/hcm-demo/draft");
+  const panel = page.getByRole("region", { name: "Editorial approval (G1)" });
+  await expect(panel.getByText("G1 not approved")).toBeVisible();
+  await expect(page.getByText("Passing checks is not approval")).toBeVisible();
+
+  const approve = panel.getByRole("button", { name: "Approve Editorial Draft (G1)" });
+  await approve.click();
+  const reviewer = panel.getByLabel(/Reviewer name/);
+  await expect(reviewer).toBeFocused();
+  await expect(reviewer).toHaveAttribute("aria-invalid", "true");
+  await reviewer.fill("Nguyễn Văn A");
+  await panel.getByLabel(/Comment/).fill("Chấp nhận bản nháp");
+  await approve.click();
+
+  const dialog = page.getByRole("dialog", { name: "Approve this editorial draft (G1)?" });
+  await expect(dialog).toContainText("does not verify historical claims, rights or release readiness");
+  await expect(dialog).toContainText("will be recorded with the approval");
+  await axe(page);
+  await dialog.getByRole("button", { name: "Approve draft" }).click();
+
+  await expect(panel.getByText(/Approved by Nguyễn Văn A/)).toBeVisible();
+  await expect(panel.getByText("Comment: Chấp nhận bản nháp")).toBeVisible();
+  await expect(approve).toHaveCount(0);
+  // The state comes from the engine, so it survives a reload.
+  await page.reload();
+  await expect(panel.getByText("G1 approved")).toBeVisible();
+  await page.goto("/projects/hcm-demo");
+  await expect(page.getByRole("heading", { name: "Review the draft" })).toHaveCount(0);
+
+  // A reviewed file changes outside the UI: the engine reports the approval as out of date.
+  touchStoryboardOutsideUi();
+  await page.goto("/projects/hcm-demo/draft");
+  await expect(panel.getByText("G1 approval out of date")).toBeVisible();
+  await expect(panel.getByText("G1 approved")).toHaveCount(0);
+  await expect(panel.getByText(/Previously approved by Nguyễn Văn A/)).toBeVisible();
+  await expect(panel).toContainText("storyboard.draft.json changed after it was approved");
+  await axe(page);
+
+  // It changes again after this page validated it: approval is refused, not applied blindly.
+  touchStoryboardOutsideUi();
+  await expect(panel.getByLabel(/Reviewer name/)).toHaveValue("Nguyễn Văn A"); // remembered
+  await approve.click();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
+  const alert = panel.getByRole("alert");
+  await expect(alert).toContainText("The draft changed after you last validated it");
+  await expect(panel.getByText("G1 approval out of date")).toBeVisible();
+  await alert.getByRole("button", { name: /Load the latest draft/ }).click();
+  await expect(approve).toBeEnabled();
+  await approve.click();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
+  await expect(panel.getByText("G1 approved")).toBeVisible();
 });
 
 test("unknown project and missing draft states", async ({ page }) => {

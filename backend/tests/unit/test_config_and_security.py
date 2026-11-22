@@ -9,7 +9,7 @@ from tests.conftest import ORIGIN, Client
 
 def test_health(client):
     body = client.get("/api/v1/health").json()
-    assert body["status"] == "ok" and body["schema_version"] == 1
+    assert body["status"] == "ok" and body["schema_version"] == 2
 
 
 def test_config_requires_absolute_paths(tmp_root):

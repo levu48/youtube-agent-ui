@@ -218,6 +218,8 @@ export interface DraftCheck {
   review_blockers: string[];
   approval_status: string;
   approval_changed?: string[];
+  /** The engine's own draft revision (engines with D-117); absent on older engines. */
+  revision?: string;
   needs_visuals?: string[];
   flag_counts?: Record<string, number>;
   timing?: {
@@ -230,12 +232,55 @@ export interface DraftCheck {
   scenes?: number;
 }
 
+/** The engine's review.json, for display only. Whether it is current comes from
+ * `draft_check.approval_status`, never from this record. */
+export interface ApprovalRecord {
+  status: string | null;
+  reviewer: string | null;
+  approved_at: string | null;
+  comment: string | null;
+  artifacts: Record<string, string>;
+  unresolved_blockers: string[];
+  meaning: string | null;
+}
+
 export interface DraftView {
   available: boolean;
   outline: ArtifactView<Outline>;
   script: ArtifactView<Script>;
   draft_check: DraftCheck | null;
   draft_check_error: PublicError | null;
+  /** The version the reviewer validated: the engine's revision when it reports one, else a UI
+   * hash of the checked files. Null when the report could not be verified (see the reason). */
+  review_token: string | null;
+  review_token_reason?: string | null;
+  /** "engine": the engine checks the revision under its lock; "ui": the UI checks it. */
+  review_mode?: "engine" | "ui" | null;
+  approval: ApprovalRecord | null;
+  /** False when the engine reports approved but the UI could not confirm that approval covers
+   * the version the reviewer validated. Null when nothing is approved. */
+  approval_confirmed?: boolean | null;
+  active_job_id: string | null;
+}
+
+export interface ApproveInput {
+  reviewer: string;
+  comment?: string | null;
+  confirm: true;
+  review_token: string;
+}
+
+export interface ApproveResult {
+  already_approved: boolean;
+  approved_version_matches: boolean;
+  approval: ApprovalRecord | null;
+  approval_confirmed?: boolean | null;
+  draft_check: DraftCheck | null;
+  draft_check_error: PublicError | null;
+  review_token: string | null;
+  review_token_reason?: string | null;
+  review_mode?: "engine" | "ui" | null;
+  status: StatusSummary;
 }
 
 export class ApiError extends Error {
@@ -335,6 +380,8 @@ export const api = {
   draftCheck: (id: string) => request<DraftCheck>(`/projects/${encodeURIComponent(id)}/draft-check`),
   draftAvailable: (id: string) =>
     request<{ available: boolean }>(`/projects/${encodeURIComponent(id)}/draft-available`),
+  approveDraft: (id: string, input: ApproveInput) =>
+    post<ApproveResult>(`/projects/${encodeURIComponent(id)}/draft/approve`, input),
   locationPreview: (slug: string) =>
     request<LocationPreview>(`/projects/location-preview?slug=${encodeURIComponent(slug)}`),
   discoverable: () => request<{ slug: string; location: string }[]>("/projects/discoverable"),

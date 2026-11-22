@@ -2,8 +2,8 @@
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M1 | Local foundation, projects, engine adapter, draft jobs, read-only viewer | Specified — implement now |
-| M2 | Script/outline editing, validation and editorial approval (G1) | Planned |
+| M1 | Local foundation, projects, engine adapter, draft jobs, read-only viewer | Done |
+| M2 | Script/outline editing, validation and editorial approval (G1) | In progress: validation and G1 approval implemented; editing needs the engine `draft-edit` command |
 | M3 | Research claims, sources, evidence review and approval (G2) | Planned |
 | M4 | Visual planning, candidate gallery, licensing and selection (G3) | Planned |
 | M5 | Narration studio: voices, pauses, per-scene preview, timing | Planned |

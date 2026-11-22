@@ -54,6 +54,27 @@ class ProjectRegister(_Strict):
         return v
 
 
+class DraftApprove(_Strict):
+    """Explicit G1 approval request. ``review_token`` comes from the last ``GET /draft`` the
+    reviewer saw; the approval is refused if the reviewed files changed since."""
+
+    reviewer: str = Field(min_length=1, max_length=200)
+    comment: str | None = Field(default=None, max_length=2000)
+    confirm: Literal[True]
+    review_token: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("reviewer", "comment")
+    @classmethod
+    def _text(cls, v: str | None, info) -> str | None:
+        try:
+            v = commands.clean_text(info.field_name, v, required=info.field_name == "reviewer")
+        except commands.ArgumentError as exc:
+            raise ValueError(str(exc)) from None
+        if info.field_name == "reviewer" and v and any(c in v for c in "\r\n\t"):
+            raise ValueError("reviewer must be a single line")
+        return v
+
+
 class DraftJobCreate(_Strict):
     provider: Literal["ollama", "fixture"] = "ollama"
     model: str | None = Field(default=None, max_length=128)

@@ -157,3 +157,39 @@ async def test_runner_timeout(tmp_root):
     res = await cli.run(["--version"], timeout=0.3)
     assert res.timed_out and not res.ok
     await asyncio.sleep(0)
+
+
+def test_draft_approve_args_are_single_elements_and_explicit():
+    from pathlib import Path as _P
+
+    from app.engine.commands import ArgumentError, assert_allowlisted, draft_approve_args
+
+    root = _P("/tmp/projects/x")
+    argv = draft_approve_args(root, reviewer="--force", comment="--replace-edits; rm -rf /")
+    assert argv == [
+        "draft-approve",
+        f"--project-root={root}",
+        "--reviewer=--force",
+        "--comment=--replace-edits; rm -rf /",
+    ]
+    assert_allowlisted(argv)  # values are part of one element, never separate flags
+    assert draft_approve_args(root, reviewer="  Lê Thị B  ")[2] == "--reviewer=Lê Thị B"
+    for bad in ("", "  ", "a\nb", "a\tb", "x" * 201, "nul\x00"):
+        with pytest.raises(ArgumentError):
+            draft_approve_args(root, reviewer=bad)
+    with pytest.raises(ArgumentError):
+        draft_approve_args(root, reviewer="ok", comment="x" * 2001)
+
+
+def test_draft_approve_expect_revision_is_validated():
+    from pathlib import Path as _P
+
+    from app.engine.commands import ArgumentError, assert_allowlisted, draft_approve_args
+
+    root = _P("/tmp/projects/x")
+    argv = draft_approve_args(root, reviewer="A", expect_revision="a" * 64)
+    assert argv[-2:] == [f"--expect-revision={'a' * 64}", "--json"]
+    assert_allowlisted(argv)
+    for bad in ("", "A" * 64, "a" * 63, "a" * 64 + "\n", "--force", "a" * 63 + "g"):
+        with pytest.raises(ArgumentError):
+            draft_approve_args(root, reviewer="A", expect_revision=bad)
