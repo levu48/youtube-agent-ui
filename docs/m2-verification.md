@@ -38,7 +38,7 @@
 | Backend lint | `cd backend && uv run ruff check . && uv run ruff format --check .` | pass |
 | Backend unit + integration | `cd backend && uv run pytest` | 206 passed (M1: 115). Adds 28 approval API tests, 23 report-verification tests, 34 edit API tests and 4 adapter tests (argv, stdin); 5 real-engine integration tests. |
 | Frontend lint, types, build | `cd frontend && npm run lint && npm run typecheck && npm run build` | pass |
-| Frontend component/unit tests | `cd frontend && npm test` | 58 passed (M1: 27). Adds 12 approval panel tests, 3 status-mapping tests, 7 editing-logic tests and 9 editor workspace tests. |
+| Frontend component/unit tests | `cd frontend && npm test` | 59 passed (M1: 27). Adds 13 approval panel tests, 3 status-mapping tests, 7 editing-logic tests and 9 editor workspace tests. |
 | E2E, real engine | `E2E_ENGINE=real npm run test:e2e` | 12 passed, 1 skipped (the slow-job cancel test, by design) |
 | E2E, fake engine | `E2E_ENGINE=fake npm run test:e2e` | 13 passed |
 | Required real-engine script | `ENGINE_DIR=<clone at ENGINE_REF> scripts/test-real-engine.sh` | engine at `573ebdd`; integration 5 tests, 0 skipped, 0 failed; E2E 12 passed, 1 allowed skip. Minimums raised to 5 and 12. |
@@ -68,6 +68,7 @@ Coverage of the M2-01, M2-02 and M2-03 editing tests:
 - **Found while testing:**
   - Typing a space that briefly made a field equal to the saved text reset the raw input; the editor now keeps it.
   - The approved panel did not mention unsaved edits; it now says the approval covers only the saved draft.
+  - First CI run of this PR: in the real-engine E2E, an approval clicked while "Load the latest draft" was still refetching sent the previous token, and the engine rightly refused it. Approval is now disabled while the draft is being validated again ("Validating the draft…").
 
 Coverage of the M2-02 and M2-04 approval test lists:
 - **CSRF and origin.** A wrong token or a foreign origin gets 403, and the engine is not invoked.

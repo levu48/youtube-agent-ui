@@ -75,7 +75,9 @@ export function ApprovalPanel({
   const check = draft.draft_check;
   const status = check?.approval_status;
   const record = draft.approval;
-  const blocker = approvalBlocker(draft, unsaved);
+  // While the draft is being validated again, its review token is about to change: approving
+  // now would send the previous one.
+  const blocker = validating ? "Validating the draft…" : approvalBlocker(draft, unsaved);
   // The engine reports approved, but not for a version the UI could confirm was validated.
   const unconfirmed = status === "approved" && draft.approval_confirmed === false;
 

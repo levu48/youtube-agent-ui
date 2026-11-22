@@ -140,6 +140,13 @@ describe("ApprovalPanel", () => {
     expect(button).toHaveAccessibleDescription(/refuses approval while the draft has errors/);
   });
 
+  it("is disabled while the draft is being validated again", () => {
+    renderWithQuery(<ApprovalPanel projectId="p1" draft={draft()} onValidate={vi.fn()} validating />);
+    const button = screen.getByRole("button", { name: /Approve Editorial Draft/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription("Validating the draft…");
+  });
+
   it("is disabled while a draft job is running", () => {
     setup(draft({ active_job_id: "job-1" }));
     expect(screen.getByRole("button", { name: /Approve Editorial Draft/ })).toBeDisabled();
