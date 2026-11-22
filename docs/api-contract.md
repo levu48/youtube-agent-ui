@@ -124,8 +124,24 @@ Clarifications:
 ## Milestone 2: validation and G1 approval
 
 `GET /projects/{id}/draft` gains these fields. Every call runs `draft-check` again, so the UI's **Validate Draft** action is this request.
-- `review_token`: a hex SHA-256 over the hashes of the files a G1 approval binds (`input.json`, `outline.json`, `script.json`, `storyboard.draft.json`, `assets.json`). It is issued only when the files were identical before and after the check and match the hashes the engine reported. Otherwise it is `null`, and the reviewer must validate again. It is not an engine revision.
+- `review_mode`: which side guards the reviewed version.
+  - `engine`: the installed engine reports a draft `revision` in `draft-check --json` (engine decision D-117, `youtube-agent` PR #11). The token *is* that revision, and approval passes it to `draft-approve --expect-revision … --json`. The engine compares it on the same locked snapshot it approves.
+  - `ui`: the engine has no revision (it is pinned at `d1325c4`). The token is a UI hash of the reviewed files, and the UI checks it.
+  - `null` when the check could not run.
+- `review_token`: the version the reviewer validated. It is `null` whenever the report cannot back it, and then `review_token_reason` says why. In `engine` mode it is the engine's 64-hex `revision`, issued only when the check is ok. In `ui` mode, it is a hex SHA-256 over the hashes of the files a G1 approval binds (`input.json`, `outline.json`, `script.json`, `storyboard.draft.json`, `assets.json`), issued only when:
+  - the files were byte-identical before and after the check;
+  - the check is `ok` and `approval_status` is a known value;
+  - `artifacts` is a list of well-formed entries (string `path`, 64-hex `sha256`, no duplicates);
+  - the list covers `outline.json`, `script.json` and `storyboard.draft.json`, each matching the bytes on disk, and every listed reviewed file matches;
+  - `input.json` exists.
+
+  An empty, partial or malformed report never yields a token.
 - `approval`: the engine's `review.json` (`reviewer`, `approved_at`, `comment`, `artifacts`, `unresolved_blockers`, `meaning`), or `null`. It is for display only; whether it is current comes from `draft_check.approval_status` (`approved`, `stale` or `not_approved`).
+- `approval_confirmed`: `null` unless the engine reports `approved`.
+  - `false` means the engine's current approval record is one the UI could not confirm covers the version the reviewer validated (see `approval_unconfirmed` below). The UI never presents it as the reviewer's approval.
+  - `true` otherwise.
+
+  The flag is kept in SQLite (`approval_mismatches`, migration 0002) and keyed to that exact `review.json` record.
 - `active_job_id`: the queued or running job for this project, if any.
 
 `POST /projects/{id}/draft/approve` (requires CSRF) records G1 approval through `ytagent draft-approve`.
@@ -135,15 +151,20 @@ Clarifications:
 ```
 - `reviewer` must be 1–200 characters on a single line. `confirm` must be `true`, and unknown fields are rejected (422).
 - The project is held for the duration of the call, so no draft job can start until it returns (`409 project_busy`).
-- **Response 200:** `{already_approved, approved_version_matches, approval, draft_check, draft_check_error, review_token, status}`. The approval fields come from the engine after the command; `status` is a fresh `production-status` summary. `approved_version_matches` is `false` if the engine's record covers bytes other than the ones the reviewer validated.
+- The draft is checked again first. If it passes and the current token differs from `review_token`, the response is `409 draft_changed`. If the check fails, the request goes to the engine, which refuses with its own error list.
+- **`engine` mode:** the engine enforces `--expect-revision` under its lock. A change made in between is refused (`revision_mismatch` → `409 draft_changed`), and nothing is written.
+- **`ui` mode:** the engine approves its own snapshot. Afterwards the UI compares the record's file hashes with the validated ones. If they differ, the approval is recorded as unconfirmed and the response is `409 approval_unconfirmed`, never 200. Approving again after validating the current version confirms it and clears the flag (the engine answers "already approved").
+- **Response 200:** `{already_approved, approved_version_matches: true, approval, approval_confirmed: true, draft_check, draft_check_error, review_token, review_token_reason, review_mode, status}`. The approval fields come from the engine after the command; `status` is a fresh `production-status` summary.
 
 | Code | HTTP | Cause |
 |---|---|---|
 | `job_conflict` | 409 | a draft job is queued or running (`details.job_id`) |
 | `project_busy` | 409 | another approval of this project is in progress |
-| `draft_changed` | 409 | the reviewed files changed since `review_token` was issued; validate again |
+| `draft_changed` | 409 | the reviewed files changed since `review_token` was issued (or the engine reported `revision_mismatch`); validate again |
+| `approval_unconfirmed` | 409 | `ui` mode only: the engine recorded an approval of bytes other than the validated ones. `details.approval_status` gives the engine's view. |
 | `engine_conflict` | 409 | the engine's lock is held, for example by a CLI run |
 | `approval_refused` | 422 | the engine refused because the check has errors (`details.errors[]`) |
+| `draft_unverifiable` | 422 | the check passed but its report does not verifiably cover the reviewed files; the engine is not invoked |
 | `validation_error` | 422 | request validation failed (also the standard field errors) |
 | `engine_unavailable` | 503 | the engine cannot be started |
 | `engine_timeout` | 504 | no answer in time; the process group is stopped. Reload to see whether approval was recorded. |

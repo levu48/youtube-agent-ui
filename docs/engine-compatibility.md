@@ -131,6 +131,15 @@ usage: ytagent draft-approve [-h] --project-root PROJECT_ROOT
   | Approved | `completed` | `G1 editorial: approved` |
   | Draft invalid (for example after an outside change made the script stale) | `blocked` | `G1 editorial: invalid` |
 
-**How the UI uses it.** The UI always passes `--reviewer` explicitly. It calls `draft-approve` only after checking that the reviewed files still match the version the reviewer validated, because the engine at this revision has no `--expect-revision`. A small window remains between that check and the engine's own snapshot. The UI detects it afterwards by comparing `review.json` with the hashes it checked, and reports it (`approved_version_matches: false`). An engine-side `--expect-revision` (engine PR) closes the window.
+**How the UI uses it.** The UI always passes `--reviewer` explicitly.
+
+**Two modes**, chosen per check from the engine's own output:
+- **Engine-revision mode.** If `draft-check --json` reports a 64-hex `revision` (engine D-117, `youtube-agent` PR #11), that revision is the review token. Approval runs `draft-approve --expect-revision=<rev> --json`, and the engine compares the revision on the same locked snapshot it approves. A concurrent change is refused (`revision_mismatch`, exit 9) and nothing is written. Verified against PR #11 @ `67e2876`: the 4 backend real-engine integration tests pass in this mode.
+- **UI-token mode** (this revision, `d1325c4`, which has no revision or `--expect-revision`).
+  - The UI issues its own token only when the report verifiably covers the reviewed bytes: a well-formed `artifacts` list that includes outline, script and storyboard, each matching the bytes on disk. `draft-check` does not list `input.json` or `assets.json`; the UI hashes those itself before and after the check.
+  - A window remains between the UI's check and the engine's snapshot. The UI detects a change in that window afterwards by comparing `review.json` with the validated hashes. It then answers `409 approval_unconfirmed` and remembers that record as unconfirmed, so it is never presented as the reviewer's approval.
+  - The UI cannot undo the engine's record, and must not write `review.json`. The engine's `production-status` therefore still reports the draft stage as completed, and the workspace stepper shows that genuine engine status.
+
+  Bumping `ENGINE_REF` to an engine with D-117 removes this mode in practice.
 
 Minimum compatible capabilities for M2 (review and approve): the M1 set plus `draft-approve --project-root --reviewer [--comment]`.
