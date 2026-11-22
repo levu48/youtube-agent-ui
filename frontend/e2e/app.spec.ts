@@ -278,6 +278,38 @@ test("edit outline and Vietnamese script, validate, approve; a later edit makes 
   await expect(page.getByText("Unsaved changes")).toHaveCount(0);
 });
 
+test("browser Back and Forward with unsaved edits: the edits are kept for the tab and restored", async ({ page }) => {
+  await page.goto("/projects/hcm-demo");
+  await page.getByRole("link", { name: "Edit Draft" }).first().click();
+  const title = page.getByLabel(/^Title/);
+  await expect(title).toBeEditable();
+  const saved = await title.inputValue();
+  await title.fill("Tiêu đề chưa lưu");
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Back (history navigation: no beforeunload, no link click) and Forward again.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/projects\/hcm-demo$/);
+  await page.goForward();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Tiêu đề chưa lưu");
+  await expect(page.getByText("Your unsaved edits were restored.")).toBeVisible();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Back, then open the draft again from the workspace: still there.
+  await page.goBack();
+  await page.getByRole("link", { name: "Edit Draft" }).first().click();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Tiêu đề chưa lưu");
+  await axe(page);
+
+  // Nothing reached the engine: discarding returns to the saved draft, which a reload confirms.
+  await page.getByRole("button", { name: "Discard" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Discard edits" }).click();
+  await expect(page.getByLabel(/^Title/)).toHaveValue(saved);
+  await page.reload();
+  await expect(page.getByLabel(/^Title/)).toHaveValue(saved);
+  await expect(page.getByText("Your unsaved edits were restored.")).toHaveCount(0);
+});
+
 test("unknown project and missing draft states", async ({ page }) => {
   await page.goto("/projects/does-not-exist");
   await expect(page.getByText("Project not found")).toBeVisible();

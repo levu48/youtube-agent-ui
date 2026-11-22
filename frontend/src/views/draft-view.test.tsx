@@ -82,7 +82,18 @@ function setup(routes: Parameters<typeof mockFetch>[0] = {}, draft = editable())
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
 });
+
+function publishedResult(changed: string[]) {
+  return {
+    status: "published", dry_run: false, previous_revision: REV, revision: REV2,
+    changed_files: changed, human_edited: ["outline.json"],
+    storyboard: { resplit_sections: [], scenes_added: [], scenes_removed: [], briefs_need_review: [] },
+    check: { ok: true, errors: [], warnings: [], review_blockers: [] },
+    approval_status: "not_approved", approval_changed: [],
+  };
+}
 
 describe("draft editor", () => {
   it("edits the title, marks it unsaved, blocks approval, and saves only the change", async () => {
@@ -264,5 +275,84 @@ describe("draft editor", () => {
     const dirty = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(dirty);
     expect(dirty.defaultPrevented).toBe(true);
+  });
+
+  it("keeps edits typed while a save is pending and layers them on the saved version", async () => {
+    const saved = editable({}, { revision: REV2 });
+    saved.outline.data!.title = "Mới";
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    const { calls, user } = setup({
+      "POST /projects/p1/draft/edit": async () => {
+        posts += 1;
+        if (posts === 1) await gate; // the first save is slow
+        return { json: { result: publishedResult(["outline.json", "outline.md"]), draft: saved } };
+      },
+    });
+    const title = await screen.findByLabelText(/^Title/);
+    await user.clear(title);
+    await user.type(title, "Mới");
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    expect(await screen.findByRole("button", { name: /Saving…/ })).toBeDisabled();
+
+    // While the engine is still saving: more typing in the same field and another field.
+    await user.type(title, " thêm");
+    await user.type(screen.getByLabelText(/^Central question/), " Ra sao?");
+    release();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled());
+    expect(screen.getByLabelText(/^Title/)).toHaveValue("Mới thêm");
+    expect(screen.getByLabelText(/^Central question/)).toHaveValue("Vì sao? Ra sao?");
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+    expect(toast.info).toHaveBeenCalledWith("Changes you made while saving are still unsaved.");
+
+    // The next save is checked against the version the first save produced.
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST")).toHaveLength(2));
+    expect(calls.filter((c) => c.method === "POST").map((c) => c.body)).toEqual([
+      { expected_revision: REV, outline: { title: "Mới" } },
+      { expected_revision: REV2, outline: { title: "Mới thêm", thesis_or_question: "Vì sao? Ra sao?" } },
+    ]);
+  });
+
+  it("restores unsaved edits after leaving the page (browser Back), until saved or discarded", async () => {
+    const first = setup();
+    await first.user.type(await screen.findByLabelText(/^Title/), " x");
+    first.unmount(); // what Back does: the page goes away without beforeunload or a link click
+
+    const again = setup();
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình x");
+    expect(screen.getByText(/Your unsaved edits were restored/)).toBeInTheDocument();
+    expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+
+    await again.user.click(screen.getByRole("button", { name: /Discard/ }));
+    await again.user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard edits" }));
+    expect(screen.queryByText(/Your unsaved edits were restored/)).not.toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.length).toBe(0));
+    again.unmount();
+
+    setup();
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình");
+  });
+
+  it("restores edits made on an older version as stale, so saving them is refused, not forced", async () => {
+    const first = setup();
+    await first.user.type(await screen.findByLabelText(/^Title/), " x");
+    first.unmount();
+
+    const newer = editable({}, { revision: REV2 });
+    newer.outline.data!.title = "Đổi từ CLI";
+    const { calls, user } = setup({
+      "POST /projects/p1/draft/edit": () => ({
+        status: 409,
+        json: { error: { code: "revision_conflict", message: "The draft changed since you loaded it.", details: { current_revision: REV2 } } },
+      }),
+    }, newer);
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình x");
+    expect(screen.getByText(/The draft changed since you started editing/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await screen.findByRole("dialog", { name: "The draft changed since you loaded it" });
+    expect(calls.find((c) => c.method === "POST")!.body).toEqual({ expected_revision: REV, outline: { title: "Hành trình x" } });
   });
 });

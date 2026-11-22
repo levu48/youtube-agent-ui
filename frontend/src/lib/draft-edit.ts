@@ -218,3 +218,40 @@ export function changedKeys(patch: DraftPatch): Set<string> {
     for (const k of Object.keys(s)) if (k !== "outline_section_id") keys.add(`script.${s.outline_section_id}.${k}`);
   return keys;
 }
+
+/**
+ * What is still unsaved after a save succeeded. `submitted` is the raw input the save was
+ * built from; anything typed while the request was pending differs from it and is kept, so
+ * it layers onto the newly saved draft instead of being dropped.
+ */
+export function editsAfterSave(current: Edits, submitted: Edits): Edits {
+  const rest = <T extends object>(cur: T, sub: T | undefined): T => {
+    const out = {} as T;
+    for (const [k, v] of Object.entries(cur) as [keyof T, T[keyof T]][])
+      if (v !== undefined && (!sub || sub[k] !== v)) out[k] = v;
+    return out;
+  };
+  const sections = <T extends object>(cur: Record<string, T>, sub: Record<string, T>) => {
+    const out: Record<string, T> = {};
+    for (const [id, e] of Object.entries(cur)) {
+      const r = rest(e, sub[id]);
+      if (Object.keys(r).length) out[id] = r;
+    }
+    return out;
+  };
+  const { sections: curOutline, ...curDoc } = current.outline;
+  const { sections: subOutline, ...subDoc } = submitted.outline;
+  return {
+    outline: { ...rest(curDoc, subDoc), sections: sections(curOutline, subOutline) },
+    script: { sections: sections(current.script.sections, submitted.script.sections) },
+  };
+}
+
+export function hasRawEdits(e: Edits): boolean {
+  return (
+    e.outline.title !== undefined ||
+    e.outline.thesis_or_question !== undefined ||
+    Object.keys(e.outline.sections).length > 0 ||
+    Object.keys(e.script.sections).length > 0
+  );
+}

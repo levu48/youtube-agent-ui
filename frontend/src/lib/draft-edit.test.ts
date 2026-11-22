@@ -4,7 +4,9 @@ import type { Outline, Script } from "@/lib/api";
 import {
   buildPatch,
   changedKeys,
+  editsAfterSave,
   editsAsText,
+  hasRawEdits,
   emptyEdits,
   isEmptyPatch,
   textToList,
@@ -128,4 +130,18 @@ describe("editsAsText", () => {
 
 it("textToList trims and drops blank lines", () => {
   expect(textToList(" a \r\n\n b\n")).toEqual(["a", "b"]);
+});
+
+describe("editsAfterSave", () => {
+  it("drops what was saved and keeps what was typed while the save was pending", () => {
+    const submitted = edits({ title: "Mới", sections: { "sec-01": { heading: "H" } } }, { "sec-01": { narration: "N" } });
+    const current = edits(
+      { title: "Mới thêm", thesis_or_question: "Q", sections: { "sec-01": { heading: "H", purpose: "P" } } },
+      { "sec-01": { narration: "N" } },
+    );
+    expect(editsAfterSave(current, submitted)).toEqual(
+      edits({ title: "Mới thêm", thesis_or_question: "Q", sections: { "sec-01": { purpose: "P" } } }),
+    );
+    expect(hasRawEdits(editsAfterSave(submitted, submitted))).toBe(false);
+  });
 });

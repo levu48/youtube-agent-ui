@@ -6,8 +6,9 @@ export const LEAVE_MESSAGE = "You have unsaved edits to this draft. Leave withou
 
 /**
  * Warn before leaving the page with unsaved edits: on reload/close (beforeunload) and on
- * in-app link clicks (captured before Next.js handles them). Browser Back inside the app is
- * not interceptable with the App Router; edits stay in this tab until it navigates.
+ * in-app link clicks (captured before Next.js handles them). Browser Back/Forward inside the
+ * app cannot be intercepted reliably with the App Router, so the draft view keeps unsaved
+ * edits for the tab instead (lib/edit-recovery) and restores them when the page reopens.
  */
 export function useUnsavedGuard(dirty: boolean) {
   useEffect(() => {

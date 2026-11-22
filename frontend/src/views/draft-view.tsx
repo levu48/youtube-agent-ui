@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Copy, Eye, FileX, Pencil, RefreshCw, Save, Undo2 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -24,14 +24,18 @@ import {
   buildPatch,
   changedKeys,
   editedSections,
+  editsAfterSave,
   editsAsText,
   emptyEdits,
+  hasRawEdits,
   isEmptyPatch,
   validatePatch,
   type Edits,
   type OutlineSectionEdits,
   type ScriptSectionEdits,
 } from "@/lib/draft-edit";
+import { clearEdits, loadEdits, storeEdits } from "@/lib/edit-recovery";
+import { formatDateTime } from "@/lib/format";
 import { qk } from "@/lib/queries";
 import { approvalPresentation } from "@/lib/status";
 
@@ -58,6 +62,19 @@ export function DraftView() {
   // The version the unsaved edits are based on. A refetch while editing never replaces it,
   // so a save is always checked by the engine against the revision the edits started from.
   const [editBase, setEditBase] = useState<EditableDraft | null>(null);
+  // Unsaved edits left behind in this tab (browser Back, a crash) come back once the draft
+  // loads, together with the version they were based on, so the engine's check still applies.
+  const [restoreChecked, setRestoreChecked] = useState(false);
+  const [recovered, setRecovered] = useState<string | null>(null);
+  if (!restoreChecked && d) {
+    setRestoreChecked(true);
+    const stored = loadEdits(projectId);
+    if (stored && hasRawEdits(stored.edits)) {
+      setEditBase(stored.base);
+      setEdits(stored.edits);
+      setRecovered(stored.savedAt);
+    }
+  }
   const base = editBase ?? d;
   const outline = base?.outline.data ?? null;
   const script = base?.script.data ?? null;
@@ -75,8 +92,20 @@ export function DraftView() {
   if (!dirty && editBase && d && d.editing?.revision !== editBase.editing?.revision) {
     setEditBase(null);
     setEdits(emptyEdits());
+  } else if (editBase && !hasRawEdits(edits)) {
+    setEditBase(null);
   }
   useUnsavedGuard(dirty);
+  useEffect(() => {
+    if (!restoreChecked) return;
+    if (dirty && editBase) storeEdits(projectId, editBase, edits);
+    else clearEdits(projectId);
+  }, [restoreChecked, dirty, editBase, edits, projectId]);
+  // The latest input, read when a save returns: anything typed while it was pending is kept.
+  const editsRef = useRef(edits);
+  useEffect(() => {
+    editsRef.current = edits;
+  }, [edits]);
 
   const editing = d?.editing;
   const canEdit = Boolean(editing?.can_edit && base?.editing?.revision);
@@ -119,27 +148,35 @@ export function DraftView() {
     setEditBase(null);
     setSaveError(null);
     setConfirmDiscard(false);
+    setRecovered(null);
   };
 
   const save = useMutation({
-    mutationFn: () =>
-      api.editDraft(projectId, { expected_revision: base!.editing.revision!, ...patch }),
-    onSuccess: (res) => {
-      const wasApproved = base?.draft_check?.approval_status === "approved";
+    // The patch, its revision and the raw input it came from are fixed when Save is pressed.
+    mutationFn: (v: { revision: string; patch: typeof patch; submitted: Edits; wasApproved: boolean }) =>
+      api.editDraft(projectId, { expected_revision: v.revision, ...v.patch }),
+    onSuccess: (res, v) => {
       if (res.draft) qc.setQueryData(qk.draft(projectId), res.draft);
-      setEdits(emptyEdits());
-      setEditBase(null);
+      else void qc.invalidateQueries({ queryKey: qk.draft(projectId) });
+      // Edits typed while the save was pending stay unsaved, now on top of the saved version.
+      const remaining = editsAfterSave(editsRef.current, v.submitted);
+      const kept = hasRawEdits(remaining);
+      editsRef.current = remaining;
+      setEdits(remaining);
+      setEditBase(kept && res.draft ? res.draft : null);
       setSaveError(null);
       setLastSave(res.result);
+      setRecovered(null);
       void qc.invalidateQueries({ queryKey: qk.projectStatus(projectId) });
       void qc.invalidateQueries({ queryKey: qk.projects });
       if (res.result.status === "already_current") {
         toast.info("Nothing to save: the draft already had this text.");
-      } else if (wasApproved && res.result.approval_status !== "approved") {
+      } else if (v.wasApproved && res.result.approval_status !== "approved") {
         toast.warning("Draft saved. The G1 approval is now out of date: review and approve again.");
       } else {
         toast.success("Draft saved by the engine.");
       }
+      if (kept) toast.info("Changes you made while saving are still unsaved.");
     },
     onError: (e) => {
       const err = e instanceof ApiError ? e : new ApiError(0, "error", (e as Error).message);
@@ -221,7 +258,14 @@ export function DraftView() {
                   </Button>
                 ) : null}
                 <Button
-                  onClick={() => save.mutate()}
+                  onClick={() =>
+                    save.mutate({
+                      revision: base!.editing.revision!,
+                      patch,
+                      submitted: edits,
+                      wasApproved: base?.draft_check?.approval_status === "approved",
+                    })
+                  }
                   disabled={Boolean(saveDisabledReason) || save.isPending}
                   aria-describedby={saveHelpId}
                 >
@@ -291,6 +335,12 @@ export function DraftView() {
                 {editing.paths.length ? (
                   <p className="mt-1 text-muted-foreground">Depends on the draft: {editing.paths.join(", ")}</p>
                 ) : null}
+              </div>
+            ) : null}
+            {recovered && dirty ? (
+              <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+                <strong>Your unsaved edits were restored.</strong> They were kept in this browser tab when you left the
+                page ({formatDateTime(recovered)}). Save them, or Discard to go back to the saved draft.
               </div>
             ) : null}
             {drifted ? (
