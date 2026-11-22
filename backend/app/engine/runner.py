@@ -86,8 +86,13 @@ class EngineCLI:
         if not self.cwd.is_dir():
             raise EngineUnavailable(f"engine repository not found: {redact(str(self.cwd))}")
 
-    async def run(self, args: list[str], *, timeout: float) -> EngineResult:
-        """Run a short command to completion with bounded output."""
+    async def run(
+        self, args: list[str], *, timeout: float, stdin: bytes | None = None
+    ) -> EngineResult:
+        """Run a short command to completion with bounded output.
+
+        ``stdin`` (bounded by the caller) is written to the process and closed; otherwise
+        stdin is /dev/null. It is data, never part of the command line."""
         argv = self.argv(args)
         self._check_runnable()
         start = time.monotonic()
@@ -96,7 +101,7 @@ class EngineCLI:
                 *argv,
                 cwd=self.cwd,
                 env=self.env,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
@@ -104,7 +109,7 @@ class EngineCLI:
         except OSError as exc:
             raise EngineUnavailable(f"cannot start engine: {exc.strerror or exc}") from exc
         timed_out = False
-        reader = asyncio.ensure_future(proc.communicate())
+        reader = asyncio.ensure_future(proc.communicate(stdin))
         try:
             done, _ = await asyncio.wait({reader}, timeout=timeout)
             if not done:

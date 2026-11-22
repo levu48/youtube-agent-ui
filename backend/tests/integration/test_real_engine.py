@@ -193,3 +193,128 @@ def test_g1_approval_and_staleness_with_real_engine(real_client, settings):
     code = refused.json()["error"]["code"]
     assert (refused.status_code, code) in {(422, "approval_refused"), (409, "draft_changed")}
     assert (root / "review.json").read_bytes() == approved_record  # nothing new was approved
+
+
+def _cli(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["uv", "run", "--no-sync", "ytagent", *args],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+
+
+def test_browser_edit_with_real_engine(real_client, settings):
+    """M2 editing: Vietnamese outline + script edit via draft-edit, stale revision, unknown
+    section, approval invalidation, regeneration protection and CLI interop."""
+    api = "/api/v1/projects/hcm-demo"
+    assert real_client.post("/api/v1/projects", json=PROJECT).status_code == 201
+    job_id = real_client.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+    wait_for(
+        lambda: real_client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded",
+        timeout=60,
+    )
+    d = real_client.get(f"{api}/draft/editable").json()
+    ed = d["editing"]
+    if not ed["supported"]:
+        assert not REQUIRED, "the pinned engine must support draft-edit (ENGINE_REF)"
+        pytest.skip("engine without draft-edit (D-117)")
+    assert ed["can_edit"] is True, ed
+    rev = ed["revision"]
+
+    # Approve first, so the edit must make the approval stale.
+    ok = real_client.post(
+        f"{api}/draft/approve",
+        json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": d["review_token"]},
+    )
+    assert ok.status_code == 200, ok.text
+    rev = real_client.get(f"{api}/draft/editable").json()["editing"]["revision"]
+
+    sec = d["script"]["data"]["sections"][1]["outline_section_id"]
+    narration = "Năm 1911, người thanh niên rời bến Nhà Rồng.\n\nÔng đi qua nhiều nước."
+    r = real_client.post(
+        f"{api}/draft/edit",
+        json={
+            "expected_revision": rev,
+            "outline": {
+                "title": "Hành trình (bản sửa)",
+                "sections": [{"id": sec, "purpose": "Mục đích mới."}],
+            },
+            "script": {"sections": [{"outline_section_id": sec, "narration": narration}]},
+        },
+    )
+    assert r.status_code == 200, r.text
+    res, draft = r.json()["result"], r.json()["draft"]
+    assert res["status"] == "published" and res["previous_revision"] == rev
+    assert {"outline.json", "script.json", "script.md"} <= set(res["changed_files"])
+    assert set(res["human_edited"]) == {"outline.json", "script.json"}
+    assert sec in res["storyboard"]["resplit_sections"]
+    assert draft["editing"]["revision"] == res["revision"]
+    assert draft["draft_check"]["ok"] is True
+    assert draft["draft_check"]["approval_status"] == "stale"
+    s = next(x for x in draft["script"]["data"]["sections"] if x["outline_section_id"] == sec)
+    assert s["narration"] == narration  # NFC Vietnamese round trip
+    assert "Năm 1911" in draft["script"]["markdown"]
+    assert draft["outline"]["data"]["title"] == "Hành trình (bản sửa)"
+
+    # The CLI sees the same draft and revision.
+    root = settings.projects_root_real / "hcm-demo"
+    cli = _cli("draft-check", f"--project-root={root}", "--json")
+    report = json.loads(cli.stdout)
+    assert report["revision"] == res["revision"] and report["approval_status"] == "stale"
+
+    # The old revision is refused; nothing is written.
+    before = (root / "outline.json").read_bytes()
+    stale = real_client.post(
+        f"{api}/draft/edit", json={"expected_revision": rev, "outline": {"title": "Khác"}}
+    )
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "revision_conflict"
+    assert stale.json()["error"]["details"]["current_revision"] == res["revision"]
+    assert (root / "outline.json").read_bytes() == before
+
+    # Unknown section: rejected by the engine with a location.
+    bad = real_client.post(
+        f"{api}/draft/edit",
+        json={
+            "expected_revision": res["revision"],
+            "outline": {"sections": [{"id": "sec-99", "heading": "X"}]},
+        },
+    )
+    assert bad.status_code == 422 and bad.json()["error"]["code"] == "invalid_edit"
+    assert bad.json()["error"]["details"]["errors"][0]["loc"] == "outline.sections.0.id"
+
+    # Dry run: validated, nothing written.
+    dry = real_client.post(
+        f"{api}/draft/edit",
+        json={"expected_revision": res["revision"], "dry_run": True, "outline": {"title": "Thử"}},
+    )
+    assert dry.status_code == 200 and dry.json()["result"]["status"] == "would_publish"
+    assert (root / "outline.json").read_bytes() == before
+
+    # Regeneration protection: a draft job refuses to overwrite the human edits.
+    job_id = real_client.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+    job = wait_for(
+        lambda: (
+            (j := real_client.get(f"/api/v1/jobs/{job_id}").json())["status"]
+            in ("succeeded", "failed")
+            and j
+        ),
+        timeout=60,
+    )
+    assert job["status"] == "failed" and job["exit_code"] == 2, job
+    assert (root / "outline.json").read_bytes() == before
+
+    # Re-approve the edited version through the engine revision.
+    again = real_client.get(f"{api}/draft/editable").json()
+    ok = real_client.post(
+        f"{api}/draft/approve",
+        json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": again["review_token"]},
+    )
+    assert ok.status_code == 200 and ok.json()["draft_check"]["approval_status"] == "approved"
+
+    # Downstream work blocks in-place editing.
+    (root / "research-plan.json").write_text("{}", encoding="utf-8")
+    ed = real_client.get(f"{api}/draft/editable").json()["editing"]
+    assert ed["can_edit"] is False and ed["reason_code"] == "downstream_artifacts"
+    assert ed["paths"] == ["research-plan.json"]

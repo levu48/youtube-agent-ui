@@ -57,6 +57,8 @@ class ScriptSection(_Lenient):
     summary: str | None = None
     target_duration_seconds: float | None = None
     estimated_duration_seconds: float | None = None
+    spoken_units: int | None = None
+    editorial_notes: list[str] = []
     review_flags: list[ReviewFlag] = []
 
 

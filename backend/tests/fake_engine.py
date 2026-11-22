@@ -15,6 +15,13 @@ review.json binding the reviewed files' hashes. Modes: ``approve_conflict`` (exi
 ``FAKE_REVISION=1`` emulates an engine with the draft revision of engine D-117 (PR B):
 draft-check reports ``revision`` and draft-approve takes ``--expect-revision`` and ``--json``,
 checking the revision on the same snapshot it approves (so ``approve_race`` is refused).
+
+``draft-edit`` (needs ``FAKE_REVISION=1``) mirrors the real engine's order and JSON errors
+(verified at 573ebdd): patch validation (``invalid_patch``), revision (``revision_mismatch``),
+downstream artifacts (``downstream_artifacts``), then the edit, published with regenerated
+Markdown views. Modes: ``edit_conflict`` (exit 9 ``concurrency``), ``edit_race`` (the outline
+changes before the revision check), ``edit_slow``. Every call is appended to
+``edit-calls.jsonl`` as ``{"argv": [...], "stdin": "<patch>"}``.
 """
 
 from __future__ import annotations
@@ -49,6 +56,141 @@ def _json_error(code: str, exit_code: int, message: str, **extra) -> int:
     err = {"code": code, "exit_code": exit_code, "message": message, **extra}
     print(json.dumps({"ok": False, "error": err}, ensure_ascii=False))
     return exit_code
+
+
+DOWNSTREAM = ("research-plan.json", "research.json", "visuals.json", "storyboard.json")
+OUTLINE_KEYS = {"title", "thesis_or_question", "sections"}
+O_SECTION_KEYS = {"id", "heading", "purpose", "key_points", "claims_to_investigate"}
+S_SECTION_KEYS = {"outline_section_id", "heading", "narration", "summary", "editorial_notes"}
+
+
+def _patch_problems(patch: object, outline: dict, script: dict) -> list[dict]:
+    if not isinstance(patch, dict) or not patch or set(patch) - {"outline", "script"}:
+        return [{"loc": "<root>", "msg": "invalid patch"}]
+    out: list[dict] = []
+    o, sc = patch.get("outline"), patch.get("script")
+    if o is not None:
+        if not isinstance(o, dict) or set(o) - OUTLINE_KEYS or not o:
+            out.append({"loc": "outline", "msg": "invalid outline patch"})
+        else:
+            ids = {x["id"] for x in outline["sections"]}
+            for n, x in enumerate(o.get("sections") or []):
+                if set(x) - O_SECTION_KEYS or any(v is None for v in x.values()):
+                    out.append({"loc": f"outline.sections.{n}", "msg": "invalid section patch"})
+                elif x.get("id") not in ids:
+                    out.append(
+                        {"loc": f"outline.sections.{n}.id", "msg": f"no section {x.get('id')!r}"}
+                    )
+            if any(v is None for v in o.values()):
+                out.append({"loc": "outline", "msg": "null is not allowed"})
+    if sc is not None:
+        ids = {x["outline_section_id"] for x in script["sections"]}
+        for n, x in enumerate((sc or {}).get("sections") or []):
+            if set(x) - S_SECTION_KEYS or any(v is None for v in x.values()):
+                out.append({"loc": f"script.sections.{n}", "msg": "invalid section patch"})
+            elif x.get("outline_section_id") not in ids:
+                sid = x.get("outline_section_id")
+                out.append(
+                    {"loc": f"script.sections.{n}.outline_section_id", "msg": f"no section {sid!r}"}
+                )
+    return out
+
+
+def _views(outline: dict, script: dict) -> tuple[str, str]:
+    o = [f"# {outline['title']}", ""]
+    for x in outline["sections"]:
+        o += [f"## {x['heading']}", "", x.get("purpose") or "", ""]
+    sc = [f"# {script['title']}", ""]
+    for x in script["sections"]:
+        sc += [f"## {x['heading']}", "", x["narration"], ""]
+    return "\n".join(o), "\n".join(sc)
+
+
+def _draft_edit(root: Path, o: dict, mode: str) -> int:
+    if mode == "edit_slow":
+        time.sleep(30)
+    raw = sys.stdin.buffer.read()
+    with open(root / "edit-calls.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"argv": sys.argv[1:], "stdin": raw.decode("utf-8")}) + "\n")
+    try:
+        patch = json.loads(raw)
+        outline = json.loads((root / "outline.json").read_text(encoding="utf-8"))
+        script = json.loads((root / "script.json").read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        return _json_error("invalid_patch", 2, f"the patch is invalid: {exc}", details=[])
+    problems = _patch_problems(patch, outline, script)
+    if problems:
+        msg = "the patch is invalid:\n" + "\n".join(f"  - {p['loc']}: {p['msg']}" for p in problems)
+        return _json_error("invalid_patch", 2, msg, details=problems)
+    if mode == "edit_conflict":
+        return _json_error("concurrency", 9, "another run holds the draft lock")
+    if mode == "edit_race":
+        with open(root / "outline.json", "a", encoding="utf-8") as fh:
+            fh.write("\n")
+    previous = _revision(root)
+    if o.get("expect-revision") != previous:
+        msg = f"draft revision mismatch: the current revision is {previous}; nothing was written"
+        return _json_error("revision_mismatch", 9, msg, current_revision=previous)
+    downstream = [n for n in DOWNSTREAM if (root / n).exists()]
+    if downstream:
+        msg = "cannot edit the draft in place: later-stage work depends on it (" + (
+            "; ".join(downstream) + ")."
+        )
+        return _json_error("downstream_artifacts", 9, msg, paths=downstream)
+    before = {n: _sha(root / n) for n in DRAFT_FILES}
+    op = patch.get("outline") or {}
+    for k in ("title", "thesis_or_question"):
+        if k in op:
+            outline[k] = op[k]
+    if "title" in op:
+        script["title"] = op["title"]
+    by_id = {x["id"]: x for x in outline["sections"]}
+    for x in op.get("sections") or []:
+        by_id[x["id"]].update({k: v for k, v in x.items() if k != "id"})
+    s_by_id = {x["outline_section_id"]: x for x in script["sections"]}
+    for x in (patch.get("script") or {}).get("sections") or []:
+        s_by_id[x["outline_section_id"]].update(
+            {k: v for k, v in x.items() if k != "outline_section_id"}
+        )
+    o_md, s_md = _views(outline, script)
+    out_bytes = {
+        "outline.json": json.dumps(outline, ensure_ascii=False, indent=2).encode(),
+        "script.json": json.dumps(script, ensure_ascii=False, indent=2).encode(),
+        "outline.md": o_md.encode(),
+        "script.md": s_md.encode(),
+    }
+    changed = sorted(
+        n for n, b in out_bytes.items() if hashlib.sha256(b).hexdigest() != before.get(n)
+    )
+    dry = "dry-run" in o
+    if changed and not dry:
+        for n in changed:
+            (root / n).write_bytes(out_bytes[n])
+    status = "already_current" if not changed else ("would_publish" if dry else "published")
+    check = _check(root)
+    report = {
+        "ok": True,
+        "status": status,
+        "dry_run": dry,
+        "project_root": str(root),
+        "run_id": None if dry or not changed else "edit-fake",
+        "previous_revision": previous,
+        "revision": _revision(root),
+        "changed_files": changed,
+        "files": {n: _sha(root / n) for n in REVIEWED},
+        "human_edited": [n for n in changed if n.endswith(".json")] if not dry else [],
+        "storyboard": {
+            "resplit_sections": [],
+            "scenes_added": [],
+            "scenes_removed": [],
+            "briefs_need_review": [],
+        },
+        "check": {k: check[k] for k in ("ok", "errors", "warnings", "review_blockers")},
+        "approval_status": check["approval_status"],
+        "approval_changed": check["approval_changed"],
+    }
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
 
 
 def _sha(p: Path) -> str | None:
@@ -236,6 +378,8 @@ def main() -> int:
             return 0
         print(f"approved by {rec['reviewer']}; recorded in {root / 'review.json'}")
         return 0
+    if cmd == "draft-edit" and os.environ.get("FAKE_REVISION") == "1":
+        return _draft_edit(root, o, mode)
     print(f"error: unknown command {cmd}", file=sys.stderr)
     return 2
 
