@@ -178,6 +178,8 @@ export interface ScriptSection {
   summary: string | null;
   target_duration_seconds: number | null;
   estimated_duration_seconds: number | null;
+  spoken_units?: number | null;
+  editorial_notes?: string[];
   review_flags: ReviewFlag[];
 }
 
@@ -261,6 +263,84 @@ export interface DraftView {
    * the version the reviewer validated. Null when nothing is approved. */
   approval_confirmed?: boolean | null;
   active_job_id: string | null;
+}
+
+/** Field limits for edits; they mirror the engine's draft-edit patch (D-117). */
+export interface EditLimits {
+  title: number;
+  thesis_or_question: number;
+  heading: number;
+  purpose: number;
+  key_point: number;
+  key_points: number;
+  claims_to_investigate: number;
+  narration: number;
+  summary: number;
+  editorial_note: number;
+  editorial_notes: number;
+}
+
+/** Whether the engine allows an edit now (decided by an engine dry run). */
+export interface Editing {
+  supported: boolean;
+  can_edit: boolean;
+  /** The engine's draft revision; every save is based on it. */
+  revision: string | null;
+  reason: string | null;
+  reason_code: string | null;
+  paths: string[];
+  limits: EditLimits;
+}
+
+export interface EditableDraft extends DraftView {
+  editing: Editing;
+}
+
+export interface OutlineSectionPatch {
+  id: string;
+  heading?: string;
+  purpose?: string;
+  key_points?: string[];
+  claims_to_investigate?: string[];
+}
+
+export interface ScriptSectionPatch {
+  outline_section_id: string;
+  heading?: string;
+  narration?: string;
+  summary?: string;
+  editorial_notes?: string[];
+}
+
+export interface DraftPatch {
+  outline?: { title?: string; thesis_or_question?: string; sections?: OutlineSectionPatch[] };
+  script?: { sections: ScriptSectionPatch[] };
+}
+
+export interface DraftEditInput extends DraftPatch {
+  expected_revision: string;
+  dry_run?: boolean;
+}
+
+export interface DraftEditResult {
+  result: {
+    status: "published" | "already_current" | "would_publish";
+    dry_run: boolean;
+    previous_revision: string;
+    revision: string;
+    changed_files: string[];
+    human_edited: string[];
+    storyboard: {
+      resplit_sections: string[];
+      scenes_added: string[];
+      scenes_removed: string[];
+      briefs_need_review: string[];
+    };
+    check: { ok: boolean; errors: string[]; warnings: string[]; review_blockers: string[] };
+    approval_status: string;
+    approval_changed: string[];
+  };
+  draft?: EditableDraft;
 }
 
 export interface ApproveInput {
@@ -377,6 +457,9 @@ export const api = {
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
   projectStatus: (id: string) => request<StatusSummary>(`/projects/${encodeURIComponent(id)}/status`),
   draft: (id: string) => request<DraftView>(`/projects/${encodeURIComponent(id)}/draft`),
+  draftEditable: (id: string) => request<EditableDraft>(`/projects/${encodeURIComponent(id)}/draft/editable`),
+  editDraft: (id: string, input: DraftEditInput) =>
+    post<DraftEditResult>(`/projects/${encodeURIComponent(id)}/draft/edit`, input),
   draftCheck: (id: string) => request<DraftCheck>(`/projects/${encodeURIComponent(id)}/draft-check`),
   draftAvailable: (id: string) =>
     request<{ available: boolean }>(`/projects/${encodeURIComponent(id)}/draft-available`),

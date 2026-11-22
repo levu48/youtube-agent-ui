@@ -104,22 +104,32 @@ test("workspace: Ollama unavailable is explained; fixture draft streams real log
   await expect(page.getByText("Recent jobs")).toBeVisible();
 });
 
-test("draft viewer is read-only and renders Vietnamese", async ({ page }) => {
+async function openTab(page: Page, name: "Outline" | "Script" | "Validation") {
+  await page.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
+}
+
+test("draft workspace renders Vietnamese in the editor, full script and Markdown views", async ({ page }) => {
   await page.goto("/projects/hcm-demo");
-  await page.getByRole("link", { name: "View Draft" }).first().click();
+  await page.getByRole("link", { name: "Edit Draft" }).first().click();
   await page.waitForURL(/\/draft$/);
-  await expect(page.getByText("Read-only")).toBeVisible();
+  await expect(page.getByText("Editable", { exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Projects");
-  await expect(page.getByRole("navigation", { name: "Outline" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Outline sections" })).toBeVisible();
+  await expect(page.getByLabel(/^Title/)).toHaveAttribute("lang", "vi");
+  await axe(page);
+
+  await openTab(page, "Script");
+  await expect(page.getByLabel(/^Narration/)).toHaveAttribute("lang", "vi");
+  await page.getByRole("button", { name: "Full script" }).click();
   const script = page.getByRole("article");
   await expect(script).toHaveAttribute("lang", "vi");
   await expect(script.getByRole("heading", { level: 3 }).first()).toContainText(/Câu hỏi đặt ra/);
+
+  await openTab(page, "Validation");
   await expect(page.getByRole("heading", { name: "Validation (draft-check)" })).toBeVisible();
   await expect(page.getByText(/G1 approval, as reported by the engine:/)).toContainText("Not approved");
-  // The draft text itself is not editable yet (editing needs an engine edit command).
-  await expect(page.getByRole("button", { name: /\b(save|edit)\b/i })).toHaveCount(0);
-  await expect(page.locator("article textarea, article [contenteditable]")).toHaveCount(0);
 
+  await openTab(page, "Script");
   await page.getByRole("button", { name: "Markdown view" }).click();
   await expect(page.locator(".prose-draft h1")).toBeVisible();
   await expect(page.locator(".prose-draft script")).toHaveCount(0);
@@ -136,6 +146,7 @@ test("G1: validate and approve; a later change makes it stale; a changed draft i
   page,
 }) => {
   await page.goto("/projects/hcm-demo/draft");
+  await openTab(page, "Validation");
   const panel = page.getByRole("region", { name: "Editorial approval (G1)" });
   await expect(panel.getByText("G1 not approved")).toBeVisible();
   await expect(page.getByText("Passing checks is not approval")).toBeVisible();
@@ -160,6 +171,7 @@ test("G1: validate and approve; a later change makes it stale; a changed draft i
   await expect(approve).toHaveCount(0);
   // The state comes from the engine, so it survives a reload.
   await page.reload();
+  await openTab(page, "Validation");
   await expect(panel.getByText("G1 approved")).toBeVisible();
   await page.goto("/projects/hcm-demo");
   await expect(page.getByRole("heading", { name: "Review the draft" })).toHaveCount(0);
@@ -167,6 +179,7 @@ test("G1: validate and approve; a later change makes it stale; a changed draft i
   // A reviewed file changes outside the UI: the engine reports the approval as out of date.
   touchStoryboardOutsideUi();
   await page.goto("/projects/hcm-demo/draft");
+  await openTab(page, "Validation");
   await expect(panel.getByText("G1 approval out of date")).toBeVisible();
   await expect(panel.getByText("G1 approved")).toHaveCount(0);
   await expect(panel.getByText(/Previously approved by Nguyễn Văn A/)).toBeVisible();
@@ -186,6 +199,83 @@ test("G1: validate and approve; a later change makes it stale; a changed draft i
   await approve.click();
   await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
   await expect(panel.getByText("G1 approved")).toBeVisible();
+});
+
+test("edit outline and Vietnamese script, validate, approve; a later edit makes it stale; a conflicting save is refused", async ({
+  page,
+}) => {
+  await page.goto("/projects/hcm-demo/draft");
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await expect(save).toBeDisabled();
+
+  // Outline: title and the key points of the second section.
+  const title = page.getByLabel(/^Title/);
+  await title.fill("Hồ Chí Minh: hành trình (bản biên tập)");
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+  const outlineNav = page.getByRole("navigation", { name: "Outline sections" });
+  await outlineNav.getByRole("button").nth(2).click();
+  await page.getByLabel(/^Key points/).fill("Điểm thứ nhất\nĐiểm thứ hai");
+  await expect(outlineNav.getByText("Edited")).toHaveCount(2);
+
+  // Script: Vietnamese narration of the second section.
+  await openTab(page, "Script");
+  const scriptNav = page.getByRole("navigation", { name: "Script sections" });
+  await scriptNav.getByRole("button").nth(1).click();
+  const narration = "Năm 1911, người thanh niên Nguyễn Tất Thành rời bến Nhà Rồng.\n\nÔng đi qua nhiều nước.";
+  await page.getByLabel(/^Narration/).fill(narration);
+
+  // Approval is not offered while edits are unsaved.
+  await openTab(page, "Validation");
+  const panel = page.getByRole("region", { name: "Editorial approval (G1)" });
+  // (The draft is still approved from the previous test, so the panel says the approval
+  // covers the saved draft only; the approve button is never enabled while edits are unsaved.)
+  await expect(panel).toContainText("You have unsaved edits");
+  await expect(panel.getByRole("button", { name: "Approve Editorial Draft (G1)", disabled: false })).toHaveCount(0);
+  await axe(page);
+
+  await save.click();
+  await expect(page.getByText(/Saved by the engine/)).toBeVisible();
+  await expect(page.getByText("Unsaved changes")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Validation (draft-check)" })).toBeVisible();
+  await expect(panel.getByText("G1 approval out of date")).toBeVisible(); // edited after the earlier approval
+
+  // The saved text is the engine's: it survives a reload and shows in the generated views.
+  await page.reload();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Hồ Chí Minh: hành trình (bản biên tập)");
+  await openTab(page, "Script");
+  await page.getByRole("button", { name: "Full script" }).click();
+  await expect(page.getByRole("article")).toContainText("người thanh niên Nguyễn Tất Thành rời bến Nhà Rồng");
+
+  // Approve the edited version.
+  await openTab(page, "Validation");
+  await panel.getByLabel(/Reviewer name/).fill("Trần Thị B");
+  await panel.getByRole("button", { name: "Approve Editorial Draft (G1)" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
+  await expect(panel.getByText("G1 approved")).toBeVisible();
+
+  // A later edit makes the approval out of date.
+  await openTab(page, "Outline");
+  await page.getByLabel(/^Central question/).fill("Ông là người yêu nước hay người cộng sản?");
+  await save.click();
+  await expect(page.getByText(/Saved by the engine/)).toBeVisible();
+  await openTab(page, "Validation");
+  await expect(panel.getByText("G1 approval out of date")).toBeVisible();
+  await expect(panel.getByText("G1 approved")).toHaveCount(0);
+
+  // A change made outside the UI while editing: the save is refused, nothing is overwritten.
+  await openTab(page, "Outline");
+  await page.getByLabel(/^Title/).fill("Tiêu đề xung đột");
+  touchStoryboardOutsideUi();
+  await save.click();
+  const dialog = page.getByRole("dialog", { name: "The draft changed since you loaded it" });
+  await expect(dialog.getByLabel("Your unsaved edits")).toHaveValue(/Tiêu đề xung đột/);
+  await axe(page);
+  await dialog.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Tiêu đề xung đột");
+  await save.click();
+  await page.getByRole("dialog").getByRole("button", { name: /Reload latest/ }).click();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Hồ Chí Minh: hành trình (bản biên tập)");
+  await expect(page.getByText("Unsaved changes")).toHaveCount(0);
 });
 
 test("unknown project and missing draft states", async ({ page }) => {

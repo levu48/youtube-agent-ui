@@ -75,7 +75,7 @@ export function ProjectWorkspaceView() {
           draftExists ? (
             <Button asChild variant="outline" size="lg">
               <Link href={`/projects/${encodeURIComponent(p.id)}/draft`}>
-                <BookOpen aria-hidden /> View Draft
+                <BookOpen aria-hidden /> Edit Draft
               </Link>
             </Button>
           ) : null
