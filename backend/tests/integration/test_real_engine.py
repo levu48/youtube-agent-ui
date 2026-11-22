@@ -106,9 +106,12 @@ def test_g1_approval_and_staleness_with_real_engine(real_client, settings):
     api = "/api/v1/projects/hcm-demo"
 
     early = real_client.get(f"{api}/draft").json()
+    assert early["review_token"] is None  # never issued for a draft that fails the check
+    # Engines with a draft revision (D-117) check it first, so use the engine's current one.
+    early_token = early["draft_check"].get("revision") or "0" * 64
     refused = real_client.post(
         f"{api}/draft/approve",
-        json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": early["review_token"]},
+        json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": early_token},
     )
     assert refused.status_code == 422, refused.text
     assert refused.json()["error"]["code"] == "approval_refused"
@@ -122,6 +125,12 @@ def test_g1_approval_and_staleness_with_real_engine(real_client, settings):
     draft = real_client.get(f"{api}/draft").json()
     assert draft["draft_check"]["approval_status"] == "not_approved"
     assert draft["review_token"]
+    # Engine-authoritative revision when the installed engine reports one; else the UI token.
+    if draft["draft_check"].get("revision"):
+        assert draft["review_mode"] == "engine"
+        assert draft["review_token"] == draft["draft_check"]["revision"]
+    else:
+        assert draft["review_mode"] == "ui"
 
     r = real_client.post(
         f"{api}/draft/approve",
@@ -134,7 +143,7 @@ def test_g1_approval_and_staleness_with_real_engine(real_client, settings):
     )
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["approved_version_matches"] is True
+    assert out["approved_version_matches"] is True and out["approval_confirmed"] is True
     assert out["draft_check"]["approval_status"] == "approved"
     assert out["approval"]["reviewer"] == "Nguyễn Văn A"
     draft_stage = next(s for s in out["status"]["stages"] if s["stage"] == "draft")
@@ -154,15 +163,33 @@ def test_g1_approval_and_staleness_with_real_engine(real_client, settings):
 
     # A later change to a bound file makes the approval stale (engine rule), and the old
     # review token can no longer be used to approve.
-    outline = root / "outline.json"
-    data = json.loads(outline.read_text(encoding="utf-8"))
-    data["title"] += " (sửa)"
-    outline.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    approved_record = (root / "review.json").read_bytes()
+    board = root / "storyboard.draft.json"
+    board.write_text(board.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     after = real_client.get(f"{api}/draft").json()
+    assert after["draft_check"]["ok"] is True
     assert after["draft_check"]["approval_status"] == "stale"
-    assert "outline.json" in after["draft_check"]["approval_changed"]
+    assert "storyboard.draft.json" in after["draft_check"]["approval_changed"]
+    assert after["approval_confirmed"] is None and after["review_token"] != draft["review_token"]
     again = real_client.post(
         f"{api}/draft/approve",
         json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": draft["review_token"]},
     )
     assert again.status_code == 409 and again.json()["error"]["code"] == "draft_changed"
+
+    # Editing the outline also breaks the script's hash link: the draft now has errors, and
+    # the engine itself refuses any approval (or, with a revision, the stale revision).
+    outline = root / "outline.json"
+    data = json.loads(outline.read_text(encoding="utf-8"))
+    data["title"] += " (sửa)"
+    outline.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    broken = real_client.get(f"{api}/draft").json()
+    assert broken["draft_check"]["ok"] is False and broken["review_token"] is None
+    assert "outline.json" in broken["draft_check"]["approval_changed"]
+    refused = real_client.post(
+        f"{api}/draft/approve",
+        json={"reviewer": "Nguyễn Văn A", "confirm": True, "review_token": after["review_token"]},
+    )
+    code = refused.json()["error"]["code"]
+    assert (refused.status_code, code) in {(422, "approval_refused"), (409, "draft_changed")}
+    assert (root / "review.json").read_bytes() == approved_record  # nothing new was approved

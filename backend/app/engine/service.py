@@ -89,11 +89,18 @@ class EngineService:
         return data
 
     async def draft_approve(
-        self, root: Path, *, reviewer: str, comment: str | None
+        self,
+        root: Path,
+        *,
+        reviewer: str,
+        comment: str | None,
+        expect_revision: str | None = None,
     ) -> EngineResult:
         """Run ``draft-approve`` (a short, lock-protected engine write). Callers interpret the
         exit code; afterwards the engine's draft-check is the source of truth."""
-        args = commands.draft_approve_args(root, reviewer=reviewer, comment=comment)
+        args = commands.draft_approve_args(
+            root, reviewer=reviewer, comment=comment, expect_revision=expect_revision
+        )
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout)
 

@@ -138,9 +138,19 @@ def draft_check_args(root: Path) -> list[str]:
     return [EngineOp.DRAFT_CHECK.value, _root(root), "--json"]
 
 
-def draft_approve_args(root: Path, *, reviewer: str, comment: str | None = None) -> list[str]:
+def draft_approve_args(
+    root: Path,
+    *,
+    reviewer: str,
+    comment: str | None = None,
+    expect_revision: str | None = None,
+) -> list[str]:
     """G1 approval. ``--reviewer`` is always explicit: the engine would otherwise fall back to
-    ``$YTA_REVIEWER`` or the OS user name."""
+    ``$YTA_REVIEWER`` or the OS user name.
+
+    With ``expect_revision`` (engines that report a draft ``revision``), the engine itself
+    refuses the approval unless its locked snapshot is still at that revision, and answers
+    in JSON."""
     name = clean_text("reviewer", reviewer, required=True) or ""
     if any(ch in name for ch in "\r\n\t"):
         raise ArgumentError("reviewer must be a single line")
@@ -148,6 +158,10 @@ def draft_approve_args(root: Path, *, reviewer: str, comment: str | None = None)
     note = clean_text("comment", comment)
     if note is not None:
         argv.append(f"--comment={note}")
+    if expect_revision is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", expect_revision):
+            raise ArgumentError("expect_revision must be a 64-character hex revision")
+        argv += [f"--expect-revision={expect_revision}", "--json"]
     return argv
 
 

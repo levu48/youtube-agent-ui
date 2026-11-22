@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from app.approvals import ApprovalChecks
 from app.config import Settings
 from app.db import Database
 from app.engine.runner import EngineCLI
@@ -23,6 +24,7 @@ class AppState:
     projects: ProjectService
     jobs: JobManager
     csrf_token: str
+    approvals: ApprovalChecks
 
 
 def build_state(settings: Settings, csrf_token: str, cli: EngineCLI | None = None) -> AppState:
@@ -38,7 +40,7 @@ def build_state(settings: Settings, csrf_token: str, cli: EngineCLI | None = Non
         cancel_grace=settings.cancel_grace_seconds,
         on_finished=lambda pid: (engine.invalidate(pid), projects.touch(pid)),
     )
-    return AppState(settings, db, cli, engine, projects, jobs, csrf_token)
+    return AppState(settings, db, cli, engine, projects, jobs, csrf_token, ApprovalChecks(db))
 
 
 def get_state(request: Request) -> AppState:

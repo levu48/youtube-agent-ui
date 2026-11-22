@@ -179,3 +179,17 @@ def test_draft_approve_args_are_single_elements_and_explicit():
             draft_approve_args(root, reviewer=bad)
     with pytest.raises(ArgumentError):
         draft_approve_args(root, reviewer="ok", comment="x" * 2001)
+
+
+def test_draft_approve_expect_revision_is_validated():
+    from pathlib import Path as _P
+
+    from app.engine.commands import ArgumentError, assert_allowlisted, draft_approve_args
+
+    root = _P("/tmp/projects/x")
+    argv = draft_approve_args(root, reviewer="A", expect_revision="a" * 64)
+    assert argv[-2:] == [f"--expect-revision={'a' * 64}", "--json"]
+    assert_allowlisted(argv)
+    for bad in ("", "A" * 64, "a" * 63, "a" * 64 + "\n", "--force", "a" * 63 + "g"):
+        with pytest.raises(ArgumentError):
+            draft_approve_args(root, reviewer="A", expect_revision=bad)

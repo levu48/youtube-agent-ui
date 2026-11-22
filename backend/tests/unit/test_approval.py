@@ -137,8 +137,9 @@ def test_csrf_and_origin_are_required(app, client):
 
 def test_engine_refusal_returns_errors(client, settings):
     _project(client)
-    token = client.get(f"{API}/draft").json()["review_token"]
-    r = _approve(client, token)
+    draft = client.get(f"{API}/draft").json()
+    assert draft["review_token"] is None  # no token for a draft that fails the check
+    r = _approve(client, "0" * 64)
     assert r.status_code == 422
     err = r.json()["error"]
     assert err["code"] == "approval_refused"
@@ -176,13 +177,96 @@ def test_engine_lock_conflict_is_409(client, fake_cli):
     assert r.status_code == 409 and r.json()["error"]["code"] == "engine_conflict"
 
 
-def test_change_racing_into_engine_snapshot_is_reported(client, fake_cli):
+def test_change_racing_into_engine_snapshot_is_not_treated_as_success(client, fake_cli):
     draft = _drafted(client)
     fake_cli.env["FAKE_MODE"] = "approve_race"
-    out = _approve(client, draft["review_token"]).json()
-    # The engine approved what it saw; the UI says plainly that it differs from what was checked.
-    assert out["approved_version_matches"] is False
-    assert out["draft_check"]["approval_status"] == "approved"
+    r = _approve(client, draft["review_token"])
+    # The engine approved a version the reviewer never validated: an error, not a success.
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "approval_unconfirmed"
+    fake_cli.env["FAKE_MODE"] = "ok"
+    after = client.get(f"{API}/draft").json()
+    assert after["draft_check"]["approval_status"] == "approved"  # the engine's view, shown as is
+    assert after["approval_confirmed"] is False  # ...but never presented as the reviewer's
+    # The flag survives a backend restart (it is in SQLite, not memory).
+    row = client.app.state.ctx.db.query_one("SELECT COUNT(*) AS n FROM approval_mismatches")
+    assert row["n"] == 1
+    # Reviewing the current version and approving it confirms the engine's approval.
+    ok = _approve(client, after["review_token"])
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["already_approved"] is True and ok.json()["approval_confirmed"] is True
+    assert client.get(f"{API}/draft").json()["approval_confirmed"] is True
+
+
+def test_incomplete_engine_report_issues_no_token(client, settings, fake_cli):
+    draft = _drafted(client)
+    fake_cli.env["FAKE_MODE"] = "approve_garbled"  # draft-check lists no artifacts
+    bad = client.get(f"{API}/draft").json()
+    assert bad["draft_check"]["ok"] is True
+    assert bad["review_token"] is None
+    assert "does not cover outline.json" in bad["review_token_reason"]
+    r = _approve(client, draft["review_token"])
+    assert r.status_code == 422 and r.json()["error"]["code"] == "draft_unverifiable"
+    assert not (_root(settings) / "approve-argv.json").exists()  # engine never asked
+
+
+# --------------------------------------------------- engine-authoritative revision (D-117)
+
+
+@pytest.fixture
+def revision_engine(fake_cli):
+    fake_cli.env["FAKE_REVISION"] = "1"
+    return fake_cli
+
+
+def test_engine_revision_is_the_review_token(client, settings, revision_engine):
+    draft = _drafted(client)
+    assert draft["review_mode"] == "engine"
+    assert draft["review_token"] == draft["draft_check"]["revision"]
+    r = _approve(client, draft["review_token"])
+    assert r.status_code == 200, r.text
+    assert r.json()["approval_confirmed"] is True
+    argv = json.loads((_root(settings) / "approve-argv.json").read_text())
+    assert f"--expect-revision={draft['review_token']}" in argv and "--json" in argv
+    again = _approve(client, client.get(f"{API}/draft").json()["review_token"])
+    assert again.status_code == 200 and again.json()["already_approved"] is True
+
+
+def test_engine_refuses_a_race_under_its_lock(client, settings, revision_engine):
+    draft = _drafted(client)
+    revision_engine.env["FAKE_MODE"] = "approve_race"
+    r = _approve(client, draft["review_token"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "draft_changed"
+    assert not (_root(settings) / "review.json").exists()  # nothing was approved
+
+
+def test_stale_engine_revision_is_409(client, settings, revision_engine):
+    draft = _drafted(client)
+    outline = _root(settings) / "outline.json"
+    outline.write_text(outline.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    r = _approve(client, draft["review_token"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "draft_changed"
+
+
+def test_engine_json_refusal_and_conflict(client, revision_engine):
+    _project(client)
+    r = _approve(client, "0" * 64)
+    # Revision is checked first, so an incomplete draft with a guessed token is a conflict.
+    assert r.status_code == 409 and r.json()["error"]["code"] == "draft_changed"
+    rev = client.get(f"{API}/draft").json()["draft_check"]["revision"]
+    r = _approve(client, rev)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "approval_refused"
+    assert r.json()["error"]["details"]["errors"]
+    draft = _drafted_again(client)
+    revision_engine.env["FAKE_MODE"] = "approve_conflict"
+    r = _approve(client, draft["review_token"])
+    assert r.status_code == 409 and r.json()["error"]["code"] == "engine_conflict"
+
+
+def _drafted_again(client) -> dict:
+    job_id = client.post(f"{API}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+    wait_for(lambda: client.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded")
+    return client.get(f"{API}/draft").json()
 
 
 def test_engine_unavailable_is_503(client, fake_cli, tmp_root):

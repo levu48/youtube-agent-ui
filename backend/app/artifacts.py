@@ -174,6 +174,66 @@ def review_token(hashes: dict[str, str | None]) -> str:
     return h.hexdigest()
 
 
+# Reviewed files whose hashes the engine's draft-check reports in ``artifacts`` (verified at
+# d1325c4: input.json and assets.json are bound by approval but not listed in the report).
+ENGINE_REPORTED = ("outline.json", "script.json", "storyboard.draft.json")
+APPROVAL_STATUSES = ("not_approved", "approved", "stale")
+
+
+def _is_sha(v: object) -> bool:
+    return isinstance(v, str) and len(v) == 64 and all(c in "0123456789abcdef" for c in v)
+
+
+def verify_report(check: object, hashes: dict[str, str | None]) -> str | None:
+    """Why a draft-check report cannot back a UI review token, or None if it can.
+
+    The report must be well formed and must cover every reviewed file the engine reports on,
+    each matching the bytes hashed on disk. A missing, duplicated, malformed or extra entry
+    means the report does not describe the files the reviewer is looking at."""
+    if not isinstance(check, dict) or check.get("ok") is not True:
+        return "The engine check did not pass."
+    if check.get("approval_status") not in APPROVAL_STATUSES:
+        return "The engine reported an unrecognised approval status."
+    arts = check.get("artifacts")
+    if not isinstance(arts, list):
+        return "The engine report has no artifact list."
+    seen: dict[str, str] = {}
+    for a in arts:
+        if not isinstance(a, dict) or not isinstance(a.get("path"), str):
+            return "The engine report has a malformed artifact entry."
+        path, sha = a["path"], a.get("sha256")
+        if path in seen:
+            return f"The engine report lists {path} twice."
+        if not _is_sha(sha):
+            return f"The engine report has no valid hash for {path}."
+        seen[path] = sha
+    if hashes.get("input.json") is None:
+        return "input.json is missing."
+    for name in ENGINE_REPORTED:
+        if hashes.get(name) is None:
+            return f"{name} is missing."
+        if name not in seen:
+            return f"The engine report does not cover {name}."
+    for name in REVIEWED_FILES:
+        if name in seen and seen[name] != hashes.get(name):
+            return f"{name} on disk differs from the version the engine checked."
+    return None
+
+
+def engine_revision(check: object) -> str | None:
+    """The engine's own draft revision (``draft-check --json`` ``revision``, engine D-117)."""
+    rev = check.get("revision") if isinstance(check, dict) else None
+    return rev if _is_sha(rev) else None
+
+
+def record_digest(record: dict[str, Any] | None) -> str | None:
+    """Stable identity of one engine review.json record (who, when, which file hashes)."""
+    if not record:
+        return None
+    ident = {k: record.get(k) for k in ("reviewer", "approved_at", "artifacts", "status")}
+    return hashlib.sha256(json.dumps(ident, sort_keys=True).encode()).hexdigest()
+
+
 class ReviewRecord(_Lenient):
     status: str | None = None
     reviewer: str | None = None
