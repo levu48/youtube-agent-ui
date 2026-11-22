@@ -91,6 +91,106 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 ### Minimum compatible capabilities
 `ytagent --version`; `create … --draft-provider none`; `draft --provider {ollama,fixture} --model --from-stage`; `production-status --json`; `draft-check --json`. The backend checks `--version` at startup and reports `available: false` with a reason if the CLI cannot run.
 
+## Milestone 3: research (engine M5), verified at `573ebdd`
+
+**Status:** verified, read-only, 2026-11-22. This covers the CLI help, the source and the decision log at `573ebdd` (`ytagent 0.1.0`). The engine calls this stage M5 (`docs/milestone-5-research-evidence.md`, D-76…D-87, D-90). The UI calls it M3. The browser workflow needs the engine additions E1–E3 listed at the end of this section; the full contract is in [milestone-3.md](milestones/milestone-3.md).
+
+### Commands at `573ebdd`
+
+| Command | Flags (relevant) | Output | Network | Writes | Job? |
+|---|---|---|---|---|---|
+| `research-plan` | `--replace-plan`, `--claim-provider {none,ollama,fixture}` (default none), `--model` | text: `research plan {written\|already_current\|kept_edited}: …` | none, unless `ollama` (localhost) | `research-plan.json`; creates the `evidence.json` and `research-review.json` templates | short (≤ the 60 s lock wait); with an LLM, long |
+| `research-collect` | `--search-provider {none,fixture,wikipedia}` (default none), `--fetch {auto,none,live,fixture}`, `--languages`, `--claim`, `--max-queries` 0–50, `--max-results-per-query` 0–20, `--max-pages` 0–100, `--concurrency` 1–3, `--timeout`, `--max-seconds`, `--force` | text summary only | wikipedia or live fetch | `research.json`, `snapshots.json`, `pages/*.txt` | long |
+| `research-add-url` | `--url`, `--claim`, `--fetch {live,fixture,queue}` (**default live**), `--timeout` | text: `<source_id> <url>: <outcome>[ -> <snapshot_id>]` | live by default | `research.json`, `snapshots.json`, page | short to medium |
+| `research-link` | `--claim`, `--snapshot`, `--quote`, `--role`, `--explanation`, `--occurrence`, `--source-type`, `--evidence-root`, translation flags | text: `linked <claim> <role> <snapshot>[start:end]` | none | appends to `evidence.json` | short |
+| `research-check` | `--json`, `--write-report` | **JSON** `ResearchReport` (no `revision`) | none | takes the lock, may recover, rewrites both manifests; reports only with `--write-report` | short |
+| `research-approve` | `--reviewer`, `--comment` | text | none | `research-approval.json` | short |
+| `research-apply` | (none) | text | none | `scenes[].claim_ids` in `storyboard.draft.json` (draft journal) | short |
+| `research-export` | `--replace-output` | text | none | `output/sources.md`, `render/research/citation-plan.json`, reports | short |
+
+**Shared behaviour**
+- **Errors and stdin.** Every error is `error: <message>` on stderr with an exit code; no research command uses the JSON error envelope. No command reads stdin.
+- **Locking and publishing.**
+  - All commands take the shared project lock `render/llm/manifest.lock` (60 s timeout, then exit 9). They recover both journals (`render/llm`, `render/research`).
+  - They publish through `_publish_research`, which checks hashes taken when the command started and refuses on change (exit 9).
+  - No command accepts an expected revision.
+- **Exit codes:**
+  - 2: invalid input, **and also** a human-edit conflict (`HumanEditConflictError`);
+  - 7: provider unavailable; 9: concurrency or recovery; 10: LLM; 12: approval stale or G1 not current;
+  - 14: not approvable (`research-check` still prints JSON); 15: partial search failure (results saved);
+  - 130: interrupted.
+- **Progress.** `research-collect` logs nothing per request; there is only the final summary.
+
+### Files and ownership (D-77)
+- **Human-edited:** `research-plan.json` (claims, anchors, leads), `evidence.json` (links), `research-review.json` (per-claim reviews, the completeness attestation, source rechecks). Today they are edited by hand. Only `research-link`, which appends, and `research-plan --replace-plan` write them through the CLI.
+- **Tool-owned:** `research.json`, `render/research/snapshots.json`, `render/research/pages/<sha256>.txt` (immutable, content-addressed, NFC), `research-approval.json`, the reports, and `output/sources.md`. A hand-edited tool file is untrusted (`invalid_file`).
+- **Schemas** (`research/models.py`, policy `m5-research-2`):
+
+  | Item | Format |
+  |---|---|
+  | Claim IDs | `^clm-[a-z0-9-]{3,40}$` |
+  | Claim kinds | factual, quotation, quantitative, interpretation, editorial |
+  | Statuses | unverified, supported_pending_review, verified, disputed, insufficient, editorial_nonfactual |
+  | Roles | supports, contradicts, context, mentions_only |
+  | Anchors | NFC code-point offsets, plus `excerpt` and `narration_sha256` |
+  | Evidence links | `claim_id`, `snapshot_id`, `start`, `end`, `quote`, `role`, `explanation`, `source_type`, `evidence_root`, translation fields. **Links have no ID.** |
+  | Snapshots | no licence or permission field |
+
+### Verification, G2 and G1
+- **Status is human-only.**
+  - No code writes a `ClaimReview`. A missing review means `unverified`, and `suggested_status` is report-only.
+  - `verified` requires:
+    - a `real_person` reviewer, a timezone-aware time, and a rationale of ≥30 characters and 6 words;
+    - a non-fixture `supports` passage;
+    - a contradiction resolution;
+    - for contested or interpretive claims, two independent roots (encyclopedia, user_supplied and unknown do not count) or an exceptional primary basis, plus a counter-search and a counterargument;
+    - for quotations, a verbatim primary passage or a traced translation (D-83).
+- **Fixture data.** `fixture_evidence` blocks. So does `fixture_narration`: it blocks when the storyboard's `generated_by` starts with `fixture:`. `draft-edit` does not change that, so a fixture-drafted project can never pass G2 today.
+- **Evidence check.**
+  - `text[start:end] == nfc(quote)` exactly; snapshot text is re-hashed before use (`snapshot_tampered`).
+  - `research-link` finds the quote itself and requires `--occurrence` when it appears more than once.
+- **What G2 binds.** The sha256 of input, outline and script; the exact bytes of the three human files; the narration fingerprint; the used snapshot records; the source versions; and `policy_version`.
+  - Any change makes G2 `stale`, a non-blocking item.
+  - `research-apply` and `research-export` then refuse (exit 12).
+  - `storyboard.draft.json` is not bound.
+- **G1.** `research-plan`, `research-approve`, `research-apply` and `research-export` need a current G1 (`review.json` hashes of input, outline and script).
+  - `research-apply` changes the storyboard, so G1 becomes `stale_after_apply`.
+  - `draft-edit` refuses once any research file exists (`downstream_artifacts`, D-117).
+
+### Network (D-80, D-82, D-87)
+- **Search.** Wikipedia via the MediaWiki Action API on `vi.`/`en.wikipedia.org`: ≥0.5 s between requests, `maxlag`, retries. No key and no payment.
+- **Fetcher.** Any public https URL:
+  - all resolved IPs public and pinned; ≤5 redirects;
+  - robots.txt checked for every redirect destination;
+  - size caps (2 MiB on the wire, 8 MiB decompressed, 400k characters);
+  - HTML and plain text only, PDFs metadata-only;
+  - 401/403/429 and paywalls recorded, never bypassed.
+- **Which URLs `research-collect` fetches.** It fetches every unfetched source relevant to the selected claims (`agents/research.py:682-692`). That includes queued `research-add-url` sources on **any host**, not only Wikipedia results. There is no per-host control.
+- **`YTA_HTTP_CONTACT`** adds a contact to the User-Agent. The UI never sets it.
+- **`production-status --json`** shows a research row only once G1 is approved: `completed`, `pending` or `needs_review`, with `detail` `G2 research: <gate>`. The gate (`production/gates.py`) is `recovery_required`, `pending`, `needs_review`, `approved_not_applied` or `approved`.
+
+### Gaps for a browser workflow, and the required engine additions
+1. **Edits.** There is no structured way to record decisions, edit claims, or edit or remove links. **E2 `research-edit`** brings:
+   - the persistent IDs `ev-…` and `rc-…`, `migrate_ids`, and translation operations;
+   - recheck update and remove, with rechecks keyed by (source, **cited** snapshot, current snapshot), as the engine already matches them (`checks.py:425`);
+   - an explicit `migrate_review_file` upgrade from `m5-review-0.1`, keeping every decision, outdated until confirmed again.
+2. **Revisions.** No expected revision; no revision reported. **E1:** `revision` in `research-check --json`, and `--expect-revision` on every mutating command. Collect and add-url re-check it after the network phase, and the dry-run preview checks it too.
+3. **JSON.** Only `research-check` prints it, and exit 2 is ambiguous. **E1:** `--json` everywhere and the error envelope with distinct codes.
+4. **Network control.** `research-collect` reaches any queued host. **E1:** a `--dry-run` fetch-plan preview with `plan_sha256`, and `--allow-host` enforced on every request and redirect (`host_not_allowed`).
+5. **Review invalidation.** A review survives changes to its claim and evidence. **E2:**
+   - a component review `basis` (claim including flags, anchors, per-link content, snapshots) and blocking `review_outdated`;
+   - completeness bound to both the narration and the claim inventory;
+   - append-only, hash-chained, retained review history;
+   - policy `m5-research-3`.
+6. **No offline source; fixture narration is all-or-nothing.** `Source.url` is required and is the identity, and snapshots require `requested_url`/`final_url`. **E3:**
+   - **Imported documents.** `research-add-document` creates `doc-` sources without a URL (schemas `m5-research-0.2` and `m5-snapshots-0.2`, with `acquisition: imported`). Provenance is immutable per edition (`document_provenance` on each snapshot; corrected editions via `--new-version-of`), and cited provenance is bound by G2. These sources are excluded from every network path. Imported evidence never counts as an independent root, and counts as primary only with an attestation.
+   - **Narration lineage.** Sentence-level lineage with replacement ancestry and tombstones. Nothing in a fixture-drafted project becomes human without `narration-attest`. Lineage is preserved across scene restructuring, fails closed, and is bound by the revision and G2.
+   - **Legacy fixture projects.** `narration-provenance-init` initialises fail-closed lineage for projects drafted before E3.
+7. **Progress.** Collect is silent. **E1:** a stderr line per search and fetch.
+8. **Read contract.** **E1** documents `snapshots.json` and `pages/<sha256>.txt` as stable reads with hash verification.
+
+`ENGINE_REF` stays at `573ebdd` until E1 merges. Each UI PR pins the engine merge it needs.
+
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
 **Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.

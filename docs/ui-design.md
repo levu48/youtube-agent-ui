@@ -198,6 +198,14 @@ The M1 viewer becomes the editorial workspace. The workspace's **Edit Draft** bu
   - Only `Reload latest` drops the edits. Nothing is ever overwritten or retried automatically.
 - **Discard** asks for confirmation.
 
+### 4.7 Milestone 3 (specified): the research workspace (`/projects/[id]/research`)
+Specified in [milestone-3.md](milestones/milestone-3.md#m3-03--research-workspace-ui-projectsprojectidresearch). Not built yet.
+- **Tabs:** Claims / Sources / Validation, reusing the draft workspace's tabs, split layout and section navigator.
+- **Decisions:** status badges always have text labels. The tool's suggestion is labelled "not a verdict" and never pre-selected. Outdated decisions are marked and never shown as current, and their history is viewable.
+- **Network:** every network action shows a confirmation listing the exact hosts from the engine's preview.
+- **Snapshots and imports:** snapshot and imported text is shown as plain text only. Imported documents are labelled as not retrieved by the engine.
+- **G2:** the approval panel follows the G1 panel's pattern. Applying research warns that G1 will go out of date and links back to the draft for re-approval.
+
 ## 5. Components and design contracts
 
 Implement reusable components:
