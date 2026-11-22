@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EditableDraft } from "@/lib/api";
+import { clearEdits } from "@/lib/edit-recovery";
 import { LIMITS } from "@/test/fixtures";
 import { mockFetch, renderWithQuery } from "@/test/utils";
 import { DraftView } from "@/views/draft-view";
@@ -83,6 +84,8 @@ function setup(routes: Parameters<typeof mockFetch>[0] = {}, draft = editable())
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
+  clearEdits("p1");
+  vi.restoreAllMocks();
 });
 
 function publishedResult(changed: string[]) {
@@ -354,5 +357,58 @@ describe("draft editor", () => {
     await user.click(screen.getByRole("button", { name: /^Save$/ }));
     await screen.findByRole("dialog", { name: "The draft changed since you loaded it" });
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({ expected_revision: REV, outline: { title: "Hành trình x" } });
+  });
+
+  it("stores a small payload: the edits, the base revision and text, no Markdown or checks", async () => {
+    const { user } = setup();
+    await user.type(await screen.findByLabelText(/^Title/), " x");
+    const raw = sessionStorage.getItem("yta:unsaved-draft-edits:p1")!;
+    const stored = JSON.parse(raw);
+    expect(Object.keys(stored).sort()).toEqual(["edits", "outline", "revision", "savedAt", "script", "v"]);
+    expect(stored.revision).toBe(REV);
+    expect(raw).not.toContain("# Hành trình\n\n## Mở đầu"); // the script Markdown
+    expect(screen.queryByText(/not keeping a backup/)).not.toBeInTheDocument();
+  });
+
+  it("when sessionStorage refuses the backup: warns, offers a copy, and still restores after Back", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    const first = setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const title = await screen.findByLabelText(/^Title/);
+    await first.user.type(title, " x");
+    expect(setItem).toHaveBeenCalled();
+    const warning = await screen.findByText(/not keeping a backup of your unsaved edits/);
+    const alert = warning.closest("[role=alert]") as HTMLElement;
+    await first.user.click(within(alert).getByRole("button", { name: /Copy my edits/ }));
+    expect(writeText).toHaveBeenCalledWith("[Outline] Title:\nHành trình x");
+    first.unmount();
+
+    // Back within the app: the in-memory copy restores the edits.
+    const again = setup();
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình x");
+    expect(screen.getByText(/Your unsaved edits were restored/)).toBeInTheDocument();
+    expect(screen.getByText(/not keeping a backup/)).toBeInTheDocument();
+
+    // Discarding clears both copies and the warning.
+    await again.user.click(screen.getByRole("button", { name: /Discard/ }));
+    await again.user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Discard edits" }));
+    expect(screen.queryByText(/not keeping a backup/)).not.toBeInTheDocument();
+    again.unmount();
+    setup();
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình");
+  });
+
+  it("restores from sessionStorage alone (after a reload, when memory is gone)", async () => {
+    const first = setup();
+    await first.user.type(await screen.findByLabelText(/^Title/), " x");
+    first.unmount();
+    const raw = sessionStorage.getItem("yta:unsaved-draft-edits:p1")!;
+    clearEdits("p1"); // drops memory and storage: put the stored copy back, as after a reload
+    sessionStorage.setItem("yta:unsaved-draft-edits:p1", raw);
+    setup();
+    expect(await screen.findByLabelText(/^Title/)).toHaveValue("Hành trình x");
   });
 });

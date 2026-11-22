@@ -310,6 +310,37 @@ test("browser Back and Forward with unsaved edits: the edits are kept for the ta
   await expect(page.getByText("Your unsaved edits were restored.")).toHaveCount(0);
 });
 
+test("browser storage refusing the backup: a visible warning, a copy option, and Back still keeps the edits", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Storage.prototype.setItem = () => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    };
+  });
+  await page.goto("/projects/hcm-demo");
+  await page.getByRole("link", { name: "Edit Draft" }).first().click();
+  const title = page.getByLabel(/^Title/);
+  await expect(title).toBeEditable();
+  const saved = await title.inputValue();
+  await title.fill("Không lưu được bản sao");
+  const warning = page.getByRole("alert").filter({ hasText: "not keeping a backup of your unsaved edits" });
+  await expect(warning).toBeVisible();
+  await expect(warning.getByRole("button", { name: "Copy my edits" })).toBeVisible();
+  await axe(page);
+
+  await page.goBack();
+  await expect(page).toHaveURL(/\/projects\/hcm-demo$/);
+  await page.goForward();
+  await expect(page.getByLabel(/^Title/)).toHaveValue("Không lưu được bản sao");
+  await expect(warning).toBeVisible();
+
+  await page.getByRole("button", { name: "Discard" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Discard edits" }).click();
+  await expect(page.getByLabel(/^Title/)).toHaveValue(saved);
+  await expect(warning).toHaveCount(0);
+});
+
 test("unknown project and missing draft states", async ({ page }) => {
   await page.goto("/projects/does-not-exist");
   await expect(page.getByText("Project not found")).toBeVisible();

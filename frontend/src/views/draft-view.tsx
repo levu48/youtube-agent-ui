@@ -34,7 +34,7 @@ import {
   type OutlineSectionEdits,
   type ScriptSectionEdits,
 } from "@/lib/draft-edit";
-import { clearEdits, loadEdits, storeEdits } from "@/lib/edit-recovery";
+import { clearEdits, loadEdits, storeEdits, useBackupFailed, type EditBaseSnapshot } from "@/lib/edit-recovery";
 import { formatDateTime } from "@/lib/format";
 import { qk } from "@/lib/queries";
 import { approvalPresentation } from "@/lib/status";
@@ -70,7 +70,7 @@ export function DraftView() {
     setRestoreChecked(true);
     const stored = loadEdits(projectId);
     if (stored && hasRawEdits(stored.edits)) {
-      setEditBase(stored.base);
+      setEditBase(withBase(d, stored));
       setEdits(stored.edits);
       setRecovered(stored.savedAt);
     }
@@ -98,9 +98,15 @@ export function DraftView() {
   useUnsavedGuard(dirty);
   useEffect(() => {
     if (!restoreChecked) return;
-    if (dirty && editBase) storeEdits(projectId, editBase, edits);
+    if (dirty && editBase?.editing?.revision)
+      storeEdits(
+        projectId,
+        { revision: editBase.editing.revision, outline: editBase.outline.data, script: editBase.script.data },
+        edits,
+      );
     else clearEdits(projectId);
   }, [restoreChecked, dirty, editBase, edits, projectId]);
+  const backupFailed = useBackupFailed(projectId);
   // The latest input, read when a save returns: anything typed while it was pending is kept.
   const editsRef = useRef(edits);
   useEffect(() => {
@@ -200,6 +206,15 @@ export function DraftView() {
     try {
       await navigator.clipboard.writeText(scriptText(d.script.data));
       toast.success("Script text copied");
+    } catch {
+      toast.error("Could not copy");
+    }
+  };
+
+  const copyEdits = async () => {
+    try {
+      await navigator.clipboard.writeText(editsAsText(patch, outline, script));
+      toast.success("Your unsaved edits were copied");
     } catch {
       toast.error("Could not copy");
     }
@@ -335,6 +350,18 @@ export function DraftView() {
                 {editing.paths.length ? (
                   <p className="mt-1 text-muted-foreground">Depends on the draft: {editing.paths.join(", ")}</p>
                 ) : null}
+              </div>
+            ) : null}
+            {backupFailed && dirty ? (
+              <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+                <p>
+                  <strong>This browser is not keeping a backup of your unsaved edits</strong> (its storage is blocked
+                  or full). They survive moving around the app, including Back, but not a reload, a crash or closing
+                  the tab. Save soon, or copy them somewhere safe.
+                </p>
+                <Button variant="outline" size="sm" className="mt-2" onClick={copyEdits}>
+                  <Copy aria-hidden /> Copy my edits
+                </Button>
               </div>
             ) : null}
             {recovered && dirty ? (
@@ -553,6 +580,16 @@ export function DraftView() {
       />
     </>
   );
+}
+
+/** The editing base for restored edits: the current view with the stored version's text and revision. */
+function withBase(d: EditableDraft, s: EditBaseSnapshot): EditableDraft {
+  return {
+    ...d,
+    outline: { ...d.outline, data: s.outline },
+    script: { ...d.script, data: s.script },
+    editing: { ...d.editing, revision: s.revision },
+  };
 }
 
 function SaveSummary({ result }: { result: DraftEditResult["result"] }) {
