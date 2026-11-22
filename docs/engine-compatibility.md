@@ -60,7 +60,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ## Verified findings (2026-11-20)
 
-**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision is pinned in [`ENGINE_REF`](../ENGINE_REF) and checked by `scripts/test-real-engine.sh` and CI, Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
+**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1; it is now `573ebdd` (see Milestone 2 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
 
 **Invocation.** The UI runs `uv run --no-sync ytagent …` with `cwd=YTA_ENGINE_REPO`. `--no-sync` guarantees the UI never re-syncs/modifies the engine's virtualenv. `PYTHONUNBUFFERED=1` is set so output streams line by line.
 
@@ -91,19 +91,58 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 ### Minimum compatible capabilities
 `ytagent --version`; `create … --draft-provider none`; `draft --provider {ollama,fixture} --model --from-stage`; `production-status --json`; `draft-check --json`. The backend checks `--version` at startup and reports `available: false` with a reason if the CLI cannot run.
 
-## Milestone 2 findings (2026-11-21, engine `d1325c4`)
+## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
-Verified against a read-only clone of `youtube-agent` at `d1325c44ac04e0495f4bc42976d3058cd4d43467` (`ytagent 0.1.0`). `origin/main` had no newer commits.
+**Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.
 
-### Editing: no supported command at this revision
+Verified against a fresh clone at that commit (`ytagent 0.1.0`), fixture provider, Vietnamese project. All results below were captured from the real CLI.
+
+**`draft-check --json`** adds `revision`: a 64-hex SHA-256 over every reviewed and draft file (scheme `m3-draft-revision-1`). The UI uses it as the only revision token, for both editing and approval.
+
+**`draft-edit --project-root=<root> --expect-revision=<rev> --json [--dry-run]`**
+- **Input:** the JSON patch is read from **stdin** (UTF-8, at most 1 MiB), never from a path or argument. The UI writes it to the process's stdin, then closes stdin.
+- **Patch:** strict. Unknown fields, wrong types and explicit `null` are rejected (omit a field to keep it). Fields and limits:
+  - `outline`: `title` (≤300), `thesis_or_question` (≤2000), and `sections[]`, each with `id` plus any of `heading` (≤300), `purpose` (≤2000), `key_points` (1–50 items, ≤1000 each), `claims_to_investigate` (≤50 items).
+  - `script.sections[]`: `outline_section_id` plus any of `heading`, `narration` (≤50,000, must contain words), `summary` (≤2000, may be empty), `editorial_notes` (≤50 items, ≤2000 each).
+  - Section IDs match `^[a-z0-9][a-z0-9-]{0,39}$` and must exist.
+- **Success (exit 0):** a JSON report `{ok, status, dry_run, project_root, run_id, previous_revision, revision, changed_files, files, human_edited, storyboard{resplit_sections, scenes_added, scenes_removed, briefs_need_review}, check{ok, errors, warnings, review_blockers}, approval_status, approval_changed}`.
+  - `status` is `published`, `already_current` (nothing to change) or `would_publish` (dry run).
+  - A title edit also changes `script.json`, `outline.md`, `script.md` and `storyboard.draft.json`. A narration edit re-splits that section's storyboard scenes. A kept visual brief whose scene text changed gets a `visual_brief_needed` flag.
+- **Errors:** JSON `{"ok": false, "error": {code, exit_code, message, …}}` on stdout, plus an `error:` line on stderr.
+
+| Engine `code` | Exit | Extra fields | UI response |
+|---|---|---|---|
+| `invalid_patch` | 2 | `details[{loc, msg}]` | 422 `invalid_edit` (`details.errors`) |
+| `invalid_input` | 2 | (errors as `  - …` lines in `message`) | 422 `edit_refused`: the draft already had errors |
+| `human_edit_conflict` | 2 | | 422 `edit_refused`: a hand-edited `.md` view would be regenerated |
+| `revision_mismatch` | 9 | `current_revision` | 409 `revision_conflict` (`details.current_revision`) |
+| `downstream_artifacts` | 9 | `paths` (relative names) | 409 `downstream_artifacts` (`details.paths`) |
+| `concurrency` | 9 | | 409 `engine_conflict` |
+| `unresolved_publication` | 9 | `conflicts` | 409 `unresolved_publication` |
+
+- **Order inside the engine:** parse the patch, then, under the draft lock: recover any interrupted publication, check the revision, check for downstream work (`research-plan.json`, visuals, export and so on), check the draft has no errors, apply the edit, validate, and publish everything as one journalled generation. So a stale revision never writes anything, and a dry run tells the UI whether an edit is currently allowed.
+- **Editability probe:** the UI runs `--dry-run` with the current title, a no-op that reports `already_current`. An error means editing is not possible now, with the engine's reason. Probed values:
+  - `downstream_artifacts` (`paths: ["research-plan.json"]`);
+  - `invalid_input` (the draft has errors);
+  - a revision change made in between.
+- **Regeneration protection:**
+  - Edited `outline.json` and `script.json` are recorded as human edits (`human_edited`). Afterwards, `ytagent draft` exits 2: "these files were edited after generation … would be overwritten: outline.json, script.json … Pass --replace-edits". The UI's Generate Draft job therefore fails with exit 2 and that message, and the UI never passes `--replace-edits`. This was verified through the UI with the real engine.
+  - To get new text from the model, use the CLI (`--from-stage`, or `--replace-edits` deliberately).
+- **Approval:**
+  - `review.json` is never touched. An edit changes the bound hashes, so the engine reports `approval_status: stale` with the changed files.
+  - `draft-approve --expect-revision=<rev> --json` approves only if the locked snapshot is still at `<rev>`. Otherwise it refuses with `revision_mismatch`, exit 9, and writes nothing. Its JSON is the `review.json` record plus `ok`, `already_approved` and `revision`. With this engine the UI always uses that path (`review_mode: engine`).
+- **Not driven from the UI:** crash recovery of an interrupted publication. It is covered by the engine's own tests (D-117, `tests/test_draft_edit.py`). The UI reports `unresolved_publication` and leaves resolution to the CLI.
+
+### Before D-117 (engine `d1325c4`): no edit command
+
 The engine has no CLI for editing drafts. Its docs describe `outline.json` and `script.json` as human-editable by hand, but hand edits cannot be made safely from the UI:
 - **Hash links make dependents stale.** `script.json` records `outline_sha256` and `input_sha256`, and `storyboard.draft.json` records `script_sha256` and `outline_sha256`. Changing the outline makes the script and storyboard stale; that is an error, and approval is refused.
 - **Narration is stored twice.** It lives in `script.json` sections and again, split into scenes, in `storyboard.draft.json`. `spoken_units` and `estimated_duration_seconds` are derived from it, and `outline.md`/`script.md` are generated views.
 - **Edit protection is based on bytes.** A file whose bytes differ from the engine's manifest counts as `edited` and is protected from regeneration (see the `state` of each entry in `draft-check --json` `artifacts`).
 
-Browser editing therefore waits for an engine `draft-edit` command (a separate engine PR). The UI does not write any engine file.
+Browser editing therefore needed an engine `draft-edit` command; it was added in engine PR #11 (above). The UI does not write any engine file.
 
-### `draft-approve` (G1)
+### `draft-approve` (G1) at `d1325c4`
 ```
 usage: ytagent draft-approve [-h] --project-root PROJECT_ROOT
                              [--reviewer REVIEWER] [--comment COMMENT]

@@ -26,6 +26,8 @@ def factory():
         "PATH": "/usr/bin:/bin",
         "PYTHONUNBUFFERED": "1",
         "FAKE_MODE": os.environ.get("FAKE_MODE", "ok"),
+        # Mirror the pinned engine (ENGINE_REF): draft revisions and draft-edit (D-117).
+        "FAKE_REVISION": os.environ.get("FAKE_REVISION", "1"),
     }
     settings.prepare_dirs()
     cli = EngineCLI([sys.executable, str(FAKE_ENGINE)], settings.projects_root_real, env)

@@ -37,7 +37,8 @@ function rememberReviewer(name: string) {
 }
 
 /** Why approval cannot be requested right now, or null if it can. Server checks again. */
-export function approvalBlocker(d: DraftView): string | null {
+export function approvalBlocker(d: DraftView, unsaved = false): string | null {
+  if (unsaved) return "You have unsaved edits. Save or discard them first: approval covers the saved draft only.";
   if (d.active_job_id) return "A draft job is running for this project. Wait for it to finish.";
   if (!d.draft_check) return "The engine check could not be run, so the draft cannot be approved.";
   if (!d.draft_check.ok)
@@ -52,11 +53,14 @@ export function ApprovalPanel({
   draft,
   onValidate,
   validating,
+  unsaved = false,
 }: {
   projectId: string;
   draft: DraftView;
   onValidate: () => void;
   validating: boolean;
+  /** The editor has unsaved edits: approval is not offered until they are saved or discarded. */
+  unsaved?: boolean;
 }) {
   const qc = useQueryClient();
   const uid = useId();
@@ -71,7 +75,9 @@ export function ApprovalPanel({
   const check = draft.draft_check;
   const status = check?.approval_status;
   const record = draft.approval;
-  const blocker = approvalBlocker(draft);
+  // While the draft is being validated again, its review token is about to change: approving
+  // now would send the previous one.
+  const blocker = validating ? "Validating the draft…" : approvalBlocker(draft, unsaved);
   // The engine reports approved, but not for a version the UI could confirm was validated.
   const unconfirmed = status === "approved" && draft.approval_confirmed === false;
 
@@ -205,6 +211,13 @@ export function ApprovalPanel({
             </p>
           )}
         </div>
+      ) : null}
+
+      {unsaved && !showForm ? (
+        <p className="flex items-start gap-1.5 text-sm text-warning">
+          <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" /> You have unsaved edits. This approval covers
+          the saved draft only; saving them makes it out of date.
+        </p>
       ) : null}
 
       {mismatch ? (

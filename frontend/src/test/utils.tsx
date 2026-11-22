@@ -7,7 +7,8 @@ export function renderWithQuery(ui: React.ReactElement) {
 }
 
 /** Minimal fetch mock keyed by "METHOD path" (path without /api/v1 prefix). */
-export function mockFetch(routes: Record<string, (body?: unknown) => { status?: number; json: unknown }>) {
+type Reply = { status?: number; json: unknown };
+export function mockFetch(routes: Record<string, (body?: unknown) => Reply | Promise<Reply>>) {
   const calls: { method: string; path: string; body?: unknown }[] = [];
   const fn = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://127.0.0.1:3000");
@@ -17,7 +18,7 @@ export function mockFetch(routes: Record<string, (body?: unknown) => { status?: 
     calls.push({ method, path, body });
     const handler = routes[`${method} ${path}`] ?? (path === "/session" ? () => ({ json: { csrf_token: "t" } }) : null);
     if (!handler) return new Response(JSON.stringify({ error: { code: "not_found", message: "nf" } }), { status: 404 });
-    const r = handler(body);
+    const r = await handler(body);
     return new Response(JSON.stringify(r.json), { status: r.status ?? 200, headers: { "Content-Type": "application/json" } });
   };
   globalThis.fetch = fn as typeof fetch;

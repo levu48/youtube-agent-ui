@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import re
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.engine import commands
 
@@ -239,3 +240,89 @@ class Session(BaseModel):
 class PublicErrorOut(BaseModel):
     code: str
     message: str
+
+
+# --------------------------------------------------------------- draft editing (M2)
+# Mirrors the engine's draft-edit patch (youtube-agent D-117 @ 573ebdd,
+# agents/draft_edit.py): same fields and limits. The engine validates again and is
+# authoritative; this layer rejects malformed requests before any engine run.
+
+SECTION_ID = r"^[a-z0-9][a-z0-9-]{0,39}$"
+_EDIT_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+EditShort = Annotated[str, Field(min_length=1, max_length=300)]
+EditText = Annotated[str, Field(min_length=1, max_length=2000)]
+EditItem = Annotated[str, Field(min_length=1, max_length=1000)]
+EditNote = Annotated[str, Field(min_length=1, max_length=2000)]
+EditNarration = Annotated[str, Field(min_length=1, max_length=50_000)]
+EditSummary = Annotated[str, Field(max_length=2000)]
+
+
+class _Edit(BaseModel):
+    """Strict: unknown fields, wrong types and explicit nulls are rejected (omit a field to
+    keep it). Text is not trimmed or rewritten here; the engine normalises it."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_nulls(cls, value: object) -> object:
+        if isinstance(value, dict):
+            nulls = sorted(k for k, v in value.items() if v is None)
+            if nulls:
+                raise ValueError(f"null is not allowed ({', '.join(nulls)}); omit the field")
+        return value
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def _text(cls, value: object) -> object:
+        for v in value if isinstance(value, list) else [value]:
+            if isinstance(v, str) and _EDIT_CONTROL.search(v):
+                raise ValueError("contains control characters")
+        return value
+
+
+class OutlineSectionEdit(_Edit):
+    id: str = Field(pattern=SECTION_ID)
+    heading: EditShort | None = None
+    purpose: EditText | None = None
+    key_points: Annotated[list[EditItem], Field(min_length=1, max_length=50)] | None = None
+    claims_to_investigate: Annotated[list[EditItem], Field(max_length=50)] | None = None
+
+
+class OutlineEdit(_Edit):
+    title: EditShort | None = None
+    thesis_or_question: EditText | None = None
+    sections: Annotated[list[OutlineSectionEdit], Field(max_length=100)] | None = None
+
+
+class ScriptSectionEdit(_Edit):
+    outline_section_id: str = Field(pattern=SECTION_ID)
+    heading: EditShort | None = None
+    narration: EditNarration | None = None
+    summary: EditSummary | None = None
+    editorial_notes: Annotated[list[EditNote], Field(max_length=50)] | None = None
+
+
+class ScriptEdit(_Edit):
+    sections: Annotated[list[ScriptSectionEdit], Field(min_length=1, max_length=100)]
+
+
+class DraftEditRequest(_Edit):
+    """One atomic edit of the outline and/or script, based on ``expected_revision`` (the
+    engine's draft revision the editor loaded). ``dry_run`` validates without writing."""
+
+    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dry_run: bool = False
+    outline: OutlineEdit | None = None
+    script: ScriptEdit | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> DraftEditRequest:
+        if self.outline is None and self.script is None:
+            raise ValueError("nothing to save: give outline and/or script changes")
+        return self
+
+    def patch(self) -> dict[str, Any]:
+        """The engine patch: only the fields the client set."""
+        return self.model_dump(exclude_unset=True, exclude={"expected_revision", "dry_run"})

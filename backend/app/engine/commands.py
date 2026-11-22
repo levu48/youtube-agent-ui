@@ -39,6 +39,7 @@ class EngineOp(StrEnum):
     PRODUCTION_STATUS = "production-status"
     DRAFT_CHECK = "draft-check"
     DRAFT_APPROVE = "draft-approve"
+    DRAFT_EDIT = "draft-edit"
 
 
 class ArgumentError(ValueError):
@@ -162,6 +163,21 @@ def draft_approve_args(
         if not re.fullmatch(r"[0-9a-f]{64}", expect_revision):
             raise ArgumentError("expect_revision must be a 64-character hex revision")
         argv += [f"--expect-revision={expect_revision}", "--json"]
+    return argv
+
+
+REVISION_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def draft_edit_args(root: Path, *, expect_revision: str, dry_run: bool = False) -> list[str]:
+    """Human edit of outline.json/script.json (engine D-117). The JSON patch goes on stdin,
+    never on the command line; the engine refuses unless the draft is at ``expect_revision``."""
+    if not isinstance(expect_revision, str) or not REVISION_RE.fullmatch(expect_revision):
+        raise ArgumentError("expect_revision must be a 64-character hex revision")
+    argv = [EngineOp.DRAFT_EDIT.value, _root(root), f"--expect-revision={expect_revision}"]
+    argv.append("--json")
+    if dry_run:
+        argv.append("--dry-run")
     return argv
 
 

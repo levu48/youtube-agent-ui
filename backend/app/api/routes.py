@@ -33,6 +33,7 @@ from app.schemas import (
     TERMINAL_STATUSES,
     DiscoveredProject,
     DraftApprove,
+    DraftEditRequest,
     DraftJobCreate,
     EngineInfo,
     Health,
@@ -267,7 +268,10 @@ async def project_draft(project_id: str, s: State) -> dict:
     ``/draft-check`` would return, never a raw exception. Every call runs draft-check again,
     so this is also the "Validate draft" action."""
     row = s.projects.require(project_id)
-    root = s.projects.confined_root(row)
+    return await _draft_view(s, row, s.projects.confined_root(row))
+
+
+async def _draft_view(s: AppState, row: ProjectRow, root) -> dict:
     out = read_draft(root)
     review = await _checked(s, root)
     record = read_review(root)
@@ -428,6 +432,233 @@ async def approve_draft(project_id: str, body: DraftApprove, s: State) -> dict:
         "review_mode": review.mode,
         "status": status,
     }
+
+
+# ------------------------------------------------------------------ draft editing (M2)
+
+EDIT_LIMITS = {
+    "title": 300,
+    "thesis_or_question": 2000,
+    "heading": 300,
+    "purpose": 2000,
+    "key_point": 1000,
+    "key_points": 50,
+    "claims_to_investigate": 50,
+    "narration": 50_000,
+    "summary": 2000,
+    "editorial_note": 2000,
+    "editorial_notes": 50,
+}
+
+_EDIT_UNSUPPORTED = (
+    "The installed engine cannot edit drafts: it reports no draft revision. Editing needs "
+    "youtube-agent with `draft-edit` (decision D-117)."
+)
+
+
+def _safe_paths(value: object) -> list[str]:
+    """Relative artifact names from an engine error (never absolute paths)."""
+    if not isinstance(value, list):
+        return []
+    return [p for p in value if isinstance(p, str) and not p.startswith("/") and ".." not in p][:20]
+
+
+def _edit_failure(res) -> ApiError:
+    """Map a failed ``draft-edit --json`` to a public error. Messages are redacted."""
+    jerr = _engine_json_error(res)
+    code = jerr.get("code")
+    message = redact(str(jerr.get("message") or "")).strip()
+    first = message.splitlines()[0].removeprefix("error:").strip() if message else ""
+    first = first[:MAX_ENGINE_MESSAGE]
+    if code == "revision_mismatch":
+        current = jerr.get("current_revision")
+        return ApiError(
+            409,
+            "revision_conflict",
+            "The draft changed since you loaded it (another save, the CLI or a draft job). "
+            "Nothing was saved. Reload the latest version, then apply your edits again.",
+            {"current_revision": current if engine_revision({"revision": current}) else None},
+        )
+    if code == "downstream_artifacts":
+        return ApiError(
+            409,
+            "downstream_artifacts",
+            "The draft cannot be edited in place: later-stage work depends on it. Nothing "
+            "was saved.",
+            {"paths": _safe_paths(jerr.get("paths"))},
+        )
+    if code == "invalid_patch":
+        details = jerr.get("details") if isinstance(jerr.get("details"), list) else []
+        errors = [
+            {"loc": str(d.get("loc", ""))[:200], "msg": redact(str(d.get("msg", "")))[:500]}
+            for d in details
+            if isinstance(d, dict)
+        ][:50]
+        return ApiError(
+            422, "invalid_edit", first or "The engine rejected the edit.", {"errors": errors}
+        )
+    if code in ("invalid_input", "human_edit_conflict"):
+        lines = [ln.strip() for ln in message.splitlines()[1:] if ln.strip().startswith("- ")]
+        return ApiError(
+            422,
+            "edit_refused",
+            f"The engine refused the edit: {first}" if first else "The engine refused the edit.",
+            {"errors": [ln.removeprefix("- ").strip()[:500] for ln in lines][:50]},
+        )
+    if code == "unresolved_publication":
+        return ApiError(
+            409,
+            "unresolved_publication",
+            "An earlier engine write of this draft was interrupted and must be resolved in "
+            "the CLI first. Nothing was saved.",
+        )
+    if res.exit_code == 9:
+        return ApiError(
+            409,
+            "engine_conflict",
+            "Another engine run is using this project. Try again when it has finished.",
+        )
+    return ApiError(
+        502,
+        res.classification.code,
+        f"The engine reported an error: {first}" if first else res.classification.summary,
+    )
+
+
+async def _editing(s: AppState, row: ProjectRow, root, view: dict) -> dict:
+    """Whether the draft can be edited now, decided by the engine (a no-op dry run)."""
+    check = view.get("draft_check")
+    revision = engine_revision(check)
+    out: dict = {
+        "supported": revision is not None,
+        "can_edit": False,
+        "revision": revision,
+        "reason": None,
+        "reason_code": None,
+        "paths": [],
+        "limits": EDIT_LIMITS,
+    }
+    if check is None:
+        out["reason"] = "The engine check could not be run."
+        out["reason_code"] = "check_unavailable"
+        return out
+    if revision is None:
+        out["reason"], out["reason_code"] = _EDIT_UNSUPPORTED, "engine_unsupported"
+        return out
+    if view.get("active_job_id"):
+        out["reason"] = "A draft job is running for this project. Wait for it to finish."
+        out["reason_code"] = "job_conflict"
+        return out
+    outline = (view.get("outline") or {}).get("data") or {}
+    title = outline.get("title")
+    if (view.get("outline") or {}).get("state") != "ok" or not title:
+        out["reason"], out["reason_code"] = "There is no draft to edit yet.", "no_draft"
+        return out
+    try:
+        res = await s.engine.draft_edit(
+            root, {"outline": {"title": title}}, expect_revision=revision, dry_run=True
+        )
+    except Exception as exc:
+        pe = to_public(exc, operation="draft-edit")
+        out["reason"], out["reason_code"] = pe.message, pe.code
+        return out
+    if res.exit_code == 0 and not res.timed_out:
+        out["can_edit"] = True
+        return out
+    if res.timed_out:
+        out["reason"], out["reason_code"] = "The engine did not answer in time.", "engine_timeout"
+        return out
+    err = _edit_failure(res)
+    if err.code == "revision_conflict":
+        out["reason"] = "The draft changed while it was being checked. Validate it again."
+    else:
+        out["reason"] = err.message
+        if err.details and err.details.get("errors"):
+            out["reason"] += (
+                " "
+                + "; ".join(
+                    e if isinstance(e, str) else e.get("msg", "") for e in err.details["errors"]
+                )[:1000]
+            )
+    out["reason_code"] = err.code
+    out["paths"] = (err.details or {}).get("paths", [])
+    return out
+
+
+@router.get("/projects/{project_id}/draft/editable")
+async def project_draft_editable(project_id: str, s: State) -> dict:
+    """The draft view plus ``editing``: whether the engine allows an edit now, the engine
+    revision every save must be based on, and the field limits. Also the Validate action."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    view = await _draft_view(s, row, root)
+    view["editing"] = await _editing(s, row, root, view)
+    return view
+
+
+def _public_report(data: dict) -> dict:
+    keep = (
+        "status",
+        "dry_run",
+        "previous_revision",
+        "revision",
+        "changed_files",
+        "human_edited",
+        "storyboard",
+        "check",
+        "approval_status",
+        "approval_changed",
+    )
+    return {k: data.get(k) for k in keep}
+
+
+@router.post("/projects/{project_id}/draft/edit")
+async def edit_draft(project_id: str, body: DraftEditRequest, s: State) -> dict:
+    """Save (or, with ``dry_run``, validate) one edit of the outline and/or script through
+    ``ytagent draft-edit``. The engine checks ``expected_revision`` under its lock, validates,
+    regenerates the Markdown views and storyboard scenes, and publishes atomically. The UI
+    never writes a draft file. A changed draft is 409 ``revision_conflict``; nothing is
+    overwritten."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    with s.jobs.exclusive(row.id):
+        try:
+            res = await s.engine.draft_edit(
+                root,
+                body.patch(),
+                expect_revision=body.expected_revision,
+                dry_run=body.dry_run,
+            )
+        except commands.ArgumentError as exc:
+            raise ApiError(422, "validation_error", str(exc)) from None
+        except Exception as exc:
+            pe = to_public(exc, operation="draft-edit")
+            raise ApiError(pe.status, pe.code, pe.message) from None
+        finally:
+            if not body.dry_run:
+                s.engine.invalidate(row.id)
+                s.projects.touch(row.id)
+        if res.timed_out:
+            raise ApiError(
+                504,
+                "engine_timeout",
+                "The engine did not finish in time. Reload the draft to see whether the edit "
+                "was saved before editing again.",
+            )
+        if res.exit_code != 0:
+            raise _edit_failure(res)
+        try:
+            data = json.loads(res.stdout)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict) or data.get("ok") is not True:
+            raise ApiError(502, "engine_bad_json", "The engine returned an unrecognised result.")
+    out: dict = {"result": _public_report(data)}
+    if not body.dry_run:
+        view = await _draft_view(s, row, root)
+        view["editing"] = await _editing(s, row, root, view)
+        out["draft"] = view
+    return out
 
 
 @router.get("/projects/{project_id}/draft-available")

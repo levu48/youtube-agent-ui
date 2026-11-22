@@ -193,3 +193,37 @@ def test_draft_approve_expect_revision_is_validated():
     for bad in ("", "A" * 64, "a" * 63, "a" * 64 + "\n", "--force", "a" * 63 + "g"):
         with pytest.raises(ArgumentError):
             draft_approve_args(root, reviewer="A", expect_revision=bad)
+
+
+def test_draft_edit_args_carry_no_user_text():
+    from pathlib import Path as _P
+
+    from app.engine.commands import ArgumentError, assert_allowlisted, draft_edit_args
+
+    root = _P("/tmp/projects/x")
+    argv = draft_edit_args(root, expect_revision="b" * 64)
+    assert argv == [
+        "draft-edit",
+        f"--project-root={root}",
+        f"--expect-revision={'b' * 64}",
+        "--json",
+    ]
+    assert_allowlisted(argv)
+    assert draft_edit_args(root, expect_revision="b" * 64, dry_run=True)[-1] == "--dry-run"
+    for bad in ("", "B" * 64, "b" * 65, "--force", None, "b" * 63 + "\n"):
+        with pytest.raises(ArgumentError):
+            draft_edit_args(root, expect_revision=bad)  # type: ignore[arg-type]
+
+
+async def test_runner_passes_stdin_as_data(tmp_path):
+    import sys as _sys
+
+    from app.engine.runner import EngineCLI
+
+    cli = EngineCLI(
+        [_sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read()[::-1])"],
+        tmp_path,
+        {},
+    )
+    res = await cli.run(["draft-check", "--json"], timeout=10, stdin="Đã sửa; $(rm -rf /)".encode())
+    assert res.stdout == "Đã sửa; $(rm -rf /)"[::-1]

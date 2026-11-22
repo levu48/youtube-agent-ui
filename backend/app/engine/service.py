@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,15 @@ from app.engine.public_errors import FIXED, to_public
 from app.engine.runner import EngineCLI, EngineResult, EngineUnavailable
 from app.schemas import EngineInfo, StageOut, StatusSummary
 
-CAPABILITIES = ["create", "draft", "production-status", "draft-check", "draft-approve"]
+CAPABILITIES = [
+    "create",
+    "draft",
+    "production-status",
+    "draft-check",
+    "draft-approve",
+    "draft-edit",
+]
+MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit patch
 _STATUS_TTL = 20.0
 
 
@@ -103,6 +112,18 @@ class EngineService:
         )
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout)
+
+    async def draft_edit(
+        self, root: Path, patch: dict[str, Any], *, expect_revision: str, dry_run: bool = False
+    ) -> EngineResult:
+        """Run ``draft-edit --json`` with the patch on stdin (engine D-117). The engine checks
+        the revision, validates and publishes under its lock; callers interpret its JSON."""
+        args = commands.draft_edit_args(root, expect_revision=expect_revision, dry_run=dry_run)
+        data = json.dumps(patch, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(data) > MAX_PATCH_BYTES:
+            raise commands.ArgumentError(f"the edit is larger than {MAX_PATCH_BYTES} bytes")
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout, stdin=data)
 
 
 class EngineReadError(RuntimeError):
