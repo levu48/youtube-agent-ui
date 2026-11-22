@@ -36,6 +36,8 @@ Both servers bind to `127.0.0.1` only. Press Ctrl-C to stop both.
 | `YTA_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama. Only loopback addresses are accepted. |
 | `YTA_DEFAULT_MODEL` | `qwen3:8b` | Model preselected in the UI. |
 | `YTA_ALLOW_FIXTURE_PROVIDER` | `false` | Shows the offline fixture provider, which writes placeholder text. For tests and demos only. |
+| `YTA_RESEARCH_NETWORK` | `true` | Allows research searches and live page fetches. Each one still needs you to confirm the exact hosts. `false` refuses them; queueing a URL still works. |
+| `YTA_RESEARCH_SEARCH_PROVIDER` | `wikipedia` | `fixture` uses the engine's offline test pages (`*.fixture.invalid`). Honoured only with `YTA_ALLOW_FIXTURE_PROVIDER=true`. |
 
 Projects created in the UI are ordinary engine projects. You can keep using them from the CLI, and edits and approvals made in either place are the same engine records:
 
@@ -105,13 +107,20 @@ The checkout uses `persist-credentials: false`, so the token is not left on the 
   - Saved files count as human edits, so a later Generate Draft refuses to overwrite them (the job fails with the engine's message). Regenerate from the CLI deliberately if you want new model text.
   - Editing is off when later-stage work (for example `research-plan.json`) depends on the draft.
 - **Approval (G1).** The draft page's **Approve Editorial Draft (G1)** runs `ytagent draft-approve --reviewer=<name>`. The backend refuses it while a job is active, or if the reviewed files changed since you last validated. Afterwards the page shows the engine's own state. Approval is editorial acceptance only: it does not verify claims, rights or release readiness, and it starts nothing. Any later change to the input, outline, script or storyboard makes the approval out of date, and the page says so.
+- **Research (Milestone 3, in progress).** **Research** in the sidebar, or on the project page, opens the research workspace. It needs a current G1 approval.
+  - **Prepare claims** runs `ytagent research-plan --claim-provider=none`.
+  - **Search** first asks the engine which hosts a collection may contact (`research-collect --dry-run`, which contacts nothing). The search starts only after you tick a box confirming exactly those hosts. The backend checks the plan again right before starting, and the engine refuses any other host, including redirects.
+  - **Add URL** either queues a page (no network) or fetches it now, limited to that page's own host after you confirm it.
+  - Snapshots open in a plain-text reader, served only when their SHA-256 matches the engine's record.
+  - Every action carries the research revision you loaded. If the CLI or another job changed the research meanwhile, the engine refuses it and nothing is written.
+  - Claim decisions and research approval (G2) are not in the UI yet; use the CLI. Tool suggestions are never verdicts.
 - **Statuses.** Engine stages (for example `Draft · Awaiting review`) and job statuses (`Succeeded`) are shown separately. Exit code 16 is treated as an expected human-review gate, not a crash.
 
 ## Security model
 
 - Loopback-only binding. The backend rejects any `Host` that isn't loopback and any `Origin` other than the UI.
 - Every state-changing request needs a per-process CSRF token from `/api/v1/session`. CORS is restricted to the UI origin.
-- Engine commands are built as argument lists from an allowlist of seven operations: `--version`, `create`, `draft`, `production-status`, `draft-check`, `draft-approve` and `draft-edit`. The only data sent on stdin is the `draft-edit` JSON patch, which is validated and limited to 1 MiB. Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
+- Engine commands are built as argument lists from an allowlist of eleven operations: `--version`, `create`, `draft`, `production-status`, `draft-check`, `draft-approve`, `draft-edit`, `research-check`, `research-plan`, `research-collect` and `research-add-url`. Research network use always carries an explicit `--allow-host` per confirmed host; hosts are DNS names, never IP addresses. The only data sent on stdin is the `draft-edit` JSON patch, which is validated and limited to 1 MiB. Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
 - The browser never supplies a filesystem path. Project folders are `<projects root>/<validated slug>` and are re-checked (no symlinks, still inside the root) right before each use. Artifacts are read only under fixed file names, with size limits and UTF-8 checks. Markdown is rendered without raw HTML.
 - Diagnostics are redacted (credentials, home directory) and truncated before they are stored or shown.
 
@@ -135,3 +144,4 @@ The checkout uses `persist-credentials: false`, so the token is not left on the 
 - [docs/milestones/](docs/milestones/): roadmap and Milestone 1 backlog
 - [docs/m1-verification.md](docs/m1-verification.md): Milestone 1 test record and known limitations
 - [docs/m2-verification.md](docs/m2-verification.md): Milestone 2 test record
+- [docs/m3-verification.md](docs/m3-verification.md): Milestone 3 test record (in progress)
