@@ -16,7 +16,7 @@
   - unsaved markers, Save / Discard, and a warning before leaving the page; unsaved edits are kept for the tab across browser Back/Forward and restored;
   - a conflict dialog with Copy my edits / Reload latest;
   - approval disabled while edits are unsaved.
-- `ENGINE_REF` is bumped to `573ebdd`. The required real-engine script now expects at least 5 integration tests and 13 E2E passes.
+- `ENGINE_REF` is bumped to `573ebdd`. The required real-engine script now expects at least 5 integration tests and 14 E2E passes.
 
 ## Part 1: validation and approval
 - `POST /projects/{id}/draft/approve` runs `ytagent draft-approve --reviewer=<name> [--comment=…]` from the allowlist, adding `--expect-revision=<rev> --json` when the engine supports a draft revision.
@@ -38,10 +38,10 @@
 | Backend lint | `cd backend && uv run ruff check . && uv run ruff format --check .` | pass |
 | Backend unit + integration | `cd backend && uv run pytest` | 206 passed (M1: 115). Adds 28 approval API tests, 23 report-verification tests, 34 edit API tests and 4 adapter tests (argv, stdin); 5 real-engine integration tests. |
 | Frontend lint, types, build | `cd frontend && npm run lint && npm run typecheck && npm run build` | pass |
-| Frontend component/unit tests | `cd frontend && npm test` | 63 passed (M1: 27). Adds 13 approval panel tests, 3 status-mapping tests, 8 editing-logic tests and 12 editor workspace tests. |
-| E2E, real engine | `E2E_ENGINE=real npm run test:e2e` | 13 passed, 1 skipped (the slow-job cancel test, by design) |
-| E2E, fake engine | `E2E_ENGINE=fake npm run test:e2e` | 14 passed |
-| Required real-engine script | `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` (fresh clone at `ENGINE_REF`) | engine at `573ebdd`; integration 5 tests, 0 skipped, 0 failed; E2E 13 passed, 1 allowed skip. Minimums raised to 5 and 13. |
+| Frontend component/unit tests | `cd frontend && npm test` | 66 passed (M1: 27). Adds 13 approval panel tests, 3 status-mapping tests, 8 editing-logic tests and 15 editor workspace tests. |
+| E2E, real engine | `E2E_ENGINE=real npm run test:e2e` | 14 passed, 1 skipped (the slow-job cancel test, by design) |
+| E2E, fake engine | `E2E_ENGINE=fake npm run test:e2e` | 15 passed |
+| Required real-engine script | `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` (fresh clone at `ENGINE_REF`) | engine at `573ebdd`; integration 5 tests, 0 skipped, 0 failed; E2E 14 passed, 1 allowed skip. Minimums raised to 5 and 14. |
 | Real-engine integration, engine PR #11 | `YTA_TEST_ENGINE_REPO=<clone of youtube-agent feat/draft-edit @ 67e2876> YTA_REQUIRE_ENGINE=1 uv run pytest tests/integration` | 4 passed; the G1 test runs in engine-revision mode (`review_mode: engine`, `--expect-revision`). Extra evidence only: `ENGINE_REF` is unchanged. |
 
 Coverage of the M2-01, M2-02 and M2-03 editing tests:
@@ -92,6 +92,17 @@ Coverage of the M2-02 and M2-04 approval test lists:
   - The disabled button's description gives the reason.
   - Axe WCAG 2.2 AA runs with the dialog open and on the stale state.
 
+## Second review of PR #4 (commit `62496bc`), addressed
+**P2, recovery could fail silently when browser storage is unavailable.** Before, a failed `sessionStorage` write was ignored, so with storage blocked or full, browser Back could still lose the edits without any sign.
+- **Smaller payload.** The backup holds only the edits, the base revision and the base outline and script data (`v: 2`). The Markdown, the draft-check, the approval record and the editing metadata are taken from the current view on restore.
+- **Fallback.** Every write also keeps an in-memory copy for the tab's JavaScript session, which cannot fail. In-app navigation, including Back and Forward, keeps it, so the edits are restored even when storage refuses the write. `sessionStorage` remains the copy that survives a reload or a page crash.
+- **Detected and visible.** `storeEdits` reports whether the durable write succeeded (`useBackupFailed`). While it fails, the draft page shows an alert: the browser is not keeping a backup, the edits survive moving around the app but not a reload, a crash or closing the tab, with a **Copy my edits** button. Closing and reloading still ask first. Save or Discard clears both copies and the alert.
+- **Tests.**
+  - Component: `sessionStorage.setItem` throws `QuotaExceededError`. The test checks the alert, that the copy button copies the edits, that the edits are restored after unmounting (Back), and that Discard clears them.
+  - Component: the stored payload contains only the six expected keys and no Markdown. A third test restores from `sessionStorage` alone, the reload path.
+  - Playwright (both engines): `Storage.prototype.setItem` is made to throw. The alert and the copy button show, axe passes, Back and Forward restore the title, and Discard removes the alert.
+  - The first two component tests fail on `62496bc`.
+
 ## Review of PR #4 (commit `9194d6e`), addressed
 Engine-owned saves and the optimistic revision check are unchanged: every save is still one `draft-edit --expect-revision` run, and nothing restored or kept is sent until the reviewer presses Save.
 
@@ -130,7 +141,7 @@ Engine-owned saves and the optimistic revision check are unchanged: every save i
 **Found while testing:** axe flagged the dialog's scrollable list of blockers as not keyboard-reachable (`scrollable-region-focusable`). The list is now focusable and labelled.
 
 ## Known limitations
-- **Browser Back/Forward** is not intercepted (App Router limitation): it leaves the page without asking, but the unsaved edits are kept for that browser tab and restored when the draft opens again. They do not follow you to another tab or survive closing the tab (closing asks first).
+- **Browser Back/Forward** is not intercepted (App Router limitation): it leaves the page without asking, but the unsaved edits are kept for that browser tab and restored when the draft opens again. They do not follow you to another tab or survive closing the tab (closing asks first). If the browser refuses storage, an in-memory copy still covers Back and Forward within the tab, and the page warns that a reload or crash would lose the edits.
 - **Crash recovery** of an interrupted engine publication is tested in the engine (D-117), not driven from the UI. The UI reports `unresolved_publication` and leaves it to the CLI.
 - **Regenerating text after an edit** is deliberately not offered: the UI never passes `--replace-edits`.
 - **Approval race with an older engine.** With the pinned engine, approval always uses `--expect-revision`, so the engine prevents the race. The UI-token fallback (409 `approval_unconfirmed`) remains only for engines older than D-117, where editing is also off.
