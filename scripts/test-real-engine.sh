@@ -71,7 +71,7 @@ for s in report["suites"]:
     walk(s)
 print(f"e2e: {stats['expected']} passed, {len(skipped)} skipped, {stats['unexpected']} failed")
 allowed = [t for t in skipped if t.startswith("cancel a running job")]
-if stats["unexpected"] or stats["expected"] < 14 or len(skipped) != len(allowed):
+if stats["unexpected"] or stats["expected"] < 15 or len(skipped) != len(allowed):
     sys.exit(f"error: real-engine E2E did not run as required (skipped: {skipped})")
 PY
 echo "==> Real-engine tests passed against youtube-agent @ $REF"

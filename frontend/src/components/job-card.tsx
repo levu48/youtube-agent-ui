@@ -85,9 +85,9 @@ export function JobCard({ jobId, title = "Draft job" }: { jobId: string; title?:
   const onCompleted = useCallback(
     async (info: CompletionInfo) => {
       const job = await refreshAfterJob(qc, jobId);
-      if (info.live) setAnnouncement(`Draft job ${JOB_STATUS[job.status].label.toLowerCase()}.`);
+      if (info.live) setAnnouncement(`${title} ${JOB_STATUS[job.status].label.toLowerCase()}.`);
     },
-    [jobId, qc],
+    [jobId, qc, title],
   );
 
   const live = useJobEvents(jobId, onCompleted);

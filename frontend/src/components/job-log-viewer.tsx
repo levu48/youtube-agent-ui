@@ -105,7 +105,7 @@ export function JobLogViewer({
                   e.type === "log" && e.data?.stream === "stderr" && "text-amber-200",
                 )}
               >
-                <span className="text-slate-500 tabular-nums">{lineTime(e)}</span>
+                <span className="text-slate-400 tabular-nums">{lineTime(e)}</span>
                 <span>{lineText(e)}</span>
               </li>
             ))}

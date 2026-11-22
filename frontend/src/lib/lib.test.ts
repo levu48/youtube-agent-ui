@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusSummary } from "@/lib/api";
 import { formatDuration, slugify } from "@/lib/format";
-import { JOB_STATUS, approvalPresentation, nextAction, stagePresentation, stageSummary } from "@/lib/status";
+import { JOB_STATUS, approvalPresentation, displayUrl, nextAction, stagePresentation, stageSummary } from "@/lib/status";
 import { minutesToSeconds, validateCreate, type CreateFormValues } from "@/lib/validation";
 
 const base: CreateFormValues = {
@@ -104,5 +104,13 @@ describe("approvalPresentation", () => {
     expect(approvalPresentation("approved", true).label).toBe("G1 approved");
     expect(approvalPresentation("approved", false)).toMatchObject({ label: "G1 approval unconfirmed", tone: "warning" });
     expect(approvalPresentation("stale", false).label).toBe("G1 approval out of date");
+  });
+});
+
+describe("displayUrl", () => {
+  it("shows percent-encoded Vietnamese paths readably and keeps malformed ones as they are", () => {
+    expect(displayUrl("https://vi.wikipedia.org/wiki/Ba_%C4%90%C3%ACnh")).toBe("https://vi.wikipedia.org/wiki/Ba_Đình");
+    expect(displayUrl("https://example.org/a%2Fb")).toBe("https://example.org/a%2Fb");
+    expect(displayUrl("https://example.org/%E0%A4%A")).toBe("https://example.org/%E0%A4%A");
   });
 });

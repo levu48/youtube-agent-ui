@@ -13,6 +13,9 @@ export const qk = {
   projectStatus: (id: string) => ["project", id, "status"] as const,
   draft: (id: string) => ["project", id, "draft"] as const,
   draftAvailable: (id: string) => ["project", id, "draft-available"] as const,
+  // Under the project key, so a finished job's refresh covers it.
+  research: (id: string) => ["project", id, "research"] as const,
+  snapshot: (id: string, snapshotId: string) => ["project", id, "snapshot", snapshotId] as const,
   jobs: (projectId?: string) => ["jobs", projectId ?? "all"] as const,
   job: (id: string) => ["job", id] as const,
   discoverable: ["discoverable"] as const,

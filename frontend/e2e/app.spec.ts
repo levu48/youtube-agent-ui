@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const IDEA = "Hồ Chí Minh: Nationalist or Communist?";
 // Mirrors e2e/serve.mjs: "fake" replays captured engine output and supports slow jobs.
@@ -16,6 +16,12 @@ async function axe(page: Page) {
   expect(
     serious.map((v) => `${v.id}: ${v.help} -> ${v.nodes.map((n) => `${n.target.join(" ")} ${n.failureSummary ?? ""}`).join(" | ")}`),
   ).toEqual([]);
+}
+
+async function settled(dialog: Locator) {
+  // Scan a dialog only after its open animation, not a half-faded frame.
+  await expect(dialog).toBeVisible();
+  await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
 }
 
 async function noHorizontalOverflow(page: Page) {
@@ -339,6 +345,73 @@ test("browser storage refusing the backup: a visible warning, a copy option, and
   await page.getByRole("dialog").getByRole("button", { name: "Discard edits" }).click();
   await expect(page.getByLabel(/^Title/)).toHaveValue(saved);
   await expect(warning).toHaveCount(0);
+});
+
+test("research: prepare claims, a confirmed search, a queued and a fetched URL, the snapshot reader", async ({
+  page,
+}) => {
+  // Research needs a current G1: the editing tests left it out of date, so approve again.
+  await page.goto("/projects/hcm-demo/draft");
+  await openTab(page, "Validation");
+  const panel = page.getByRole("region", { name: "Editorial approval (G1)" });
+  const approve = panel.getByRole("button", { name: "Approve Editorial Draft (G1)" });
+  if (await approve.count()) {
+    await panel.getByLabel(/Reviewer name/).fill("Trần Thị B");
+    await approve.click();
+    await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
+    await expect(panel.getByText("G1 approved")).toBeVisible();
+  }
+
+  await page.goto("/projects/hcm-demo");
+  await page.getByRole("link", { name: "Research" }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: "Research" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Research" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await page.getByRole("button", { name: "Prepare claims" }).click();
+  const claims = page.getByRole("tabpanel");
+  await expect(claims.getByText(/tool suggestion \(not a verdict\)/).first()).toBeVisible({ timeout: 30_000 });
+  await axe(page);
+
+  // A search: nothing starts before the engine's preview and an explicit confirmation.
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("button", { name: /Search test sources/ }).click();
+  const search = page.getByRole("dialog", { name: "Search for sources" });
+  await expect(search.getByRole("button", { name: /Start search/ })).toBeDisabled();
+  await search.getByRole("button", { name: /Check what would be contacted/ }).click();
+  await expect(search.getByRole("list", { name: "Hosts that may be contacted" })).toContainText("fixture.invalid");
+  await settled(search);
+  await axe(page);
+  await search.getByRole("checkbox", { name: /I confirm that these hosts/ }).check();
+  await search.getByRole("button", { name: /Start search/ }).click();
+  await expect(page.getByText(/Source collection finished|Succeeded/).first()).toBeVisible({ timeout: 30_000 });
+
+  // A queued URL contacts nothing; a fetched one is confined to its host.
+  await page.getByRole("button", { name: /Add URL/ }).click();
+  let add = page.getByRole("dialog", { name: "Add a URL" });
+  await add.getByLabel(/Page address/).fill("https://vi.wikipedia.org/wiki/Ba_Đình");
+  await add.getByRole("button", { name: "Queue URL" }).click();
+  await expect(page.getByText("https://vi.wikipedia.org/wiki/Ba_Đình")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: /Add URL/ }).click();
+  add = page.getByRole("dialog", { name: "Add a URL" });
+  await add.getByLabel(/Page address/).fill("https://archive.fixture.invalid/tuyen-ngon-1945");
+  await add.getByRole("radio", { name: /Fetch it now/ }).check();
+  await expect(add.getByRole("button", { name: "Fetch page" })).toBeDisabled();
+  await add.getByRole("checkbox", { name: /archive\.fixture\.invalid may be contacted/ }).check();
+  await add.getByRole("button", { name: "Fetch page" }).click();
+  const read = page.getByRole("button", { name: /^Read / }).first();
+  await expect(read).toBeVisible({ timeout: 30_000 });
+  await read.click();
+  const text = page.getByLabel("Snapshot text");
+  await expect(text).toContainText("1945");
+  await expect(page.getByRole("dialog")).toContainText("Test data: can never support real research");
+  await settled(page.getByRole("dialog"));
+  await axe(page);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("tab", { name: "Validation" }).click();
+  await expect(page.getByRole("heading", { name: "Validation (research-check)" })).toBeVisible();
 });
 
 test("unknown project and missing draft states", async ({ page }) => {

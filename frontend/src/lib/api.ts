@@ -363,6 +363,133 @@ export interface ApproveResult {
   status: StatusSummary;
 }
 
+// ---------------------------------------------------------------------- research (M3)
+
+export interface ResearchItem {
+  code: string;
+  claim_id: string | null;
+  detail: string;
+  blocking: boolean;
+  refs?: Record<string, unknown> | null;
+}
+
+export interface LinkRef {
+  snapshot_id: string;
+  source_id: string | null;
+  start: number;
+  end: number;
+  source_type: string;
+  acquisition?: string | null;
+  evidence_root: string | null;
+  is_translation: boolean;
+  translator: string | null;
+}
+
+export interface ResearchClaim {
+  id: string;
+  kind: string;
+  assertion: string;
+  contested: boolean;
+  flags: string[];
+  status: string;
+  suggested_status: string;
+  scenes: string[];
+  supports: LinkRef[];
+  contradicts: LinkRef[];
+  context: LinkRef[];
+  independent_roots: number;
+  quotation_basis: string | null;
+  reviewer: string | null;
+  rationale: string | null;
+  review_outdated?: string[];
+  outdated_review?: { status: string; reviewer: string | null; reviewed_at: string | null } | null;
+}
+
+export interface ResearchReport {
+  approvable: boolean;
+  approval_status: "not_approved" | "approved" | "stale";
+  applied: boolean;
+  counts: Record<string, number>;
+  items: ResearchItem[];
+  claims: ResearchClaim[];
+  coverage: { sentences: number; covered: number; uncovered: { scene_id: string; start: number; end: number; text: string }[] };
+  revision: string;
+}
+
+export interface ResearchSource {
+  id: string;
+  kind: "web" | "document";
+  url: string | null;
+  host: string | null;
+  state: string;
+  fixture: boolean;
+  user_supplied: boolean;
+  candidate_for: string[];
+  snapshot_ids: string[];
+  discoveries: { provider: string; query: string; language: string; title: string; snippet: string }[];
+  fetches: { at: string | null; outcome: string; detail: string | null; final_url: string | null; snapshot_id: string | null }[];
+}
+
+export interface ResearchSnapshot {
+  id: string;
+  source_id: string;
+  acquisition: "retrieved" | "imported" | "fixture";
+  requested_url: string | null;
+  final_url: string | null;
+  canonical_url: string | null;
+  retrieved_at: string | null;
+  title: string | null;
+  publisher: string | null;
+  author: string | null;
+  published_at: string | null;
+  language: string | null;
+  text_sha256: string;
+  chars: number;
+  limitations: string[];
+  fixture: boolean;
+  document_provenance: Record<string, string | null> | null;
+}
+
+export interface ResearchView {
+  report: ResearchReport | null;
+  report_error: { code: string; message: string } | null;
+  revision: string | null;
+  started: boolean;
+  sources: ResearchSource[];
+  snapshots: ResearchSnapshot[];
+  evidence: Record<string, unknown>[];
+  records_error: { code: string; message: string } | null;
+  stage: Stage | null;
+  network: { enabled: boolean; search_provider: string };
+  active_job_id: string | null;
+}
+
+export interface CollectParams {
+  languages: ("vi" | "en")[];
+  claim_ids: string[];
+  max_queries: number;
+  max_results_per_query: number;
+  max_pages: number;
+}
+
+export interface CollectPreview {
+  revision: string;
+  hosts: string[];
+  search_hosts: string[];
+  provider_result_hosts: string[];
+  known_targets: { source_id: string; url: string; host: string; reason: string }[];
+  plan_sha256: string;
+  queries: number;
+  fetch: boolean;
+  search_provider: string;
+}
+
+export interface JobStarted {
+  job_id: string;
+  project_id: string;
+  status: JobStatus;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -487,6 +614,23 @@ export const api = {
   eventsPage: (id: string, after: number, limit = 1000) =>
     request<JobEventPage>(`/jobs/${encodeURIComponent(id)}/events/page?after=${after}&limit=${limit}`),
   cancelJob: (id: string) => post<Job>(`/jobs/${encodeURIComponent(id)}/cancel`),
+  research: (id: string) => request<ResearchView>(`/projects/${encodeURIComponent(id)}/research`),
+  researchSnapshot: (id: string, snapshotId: string) =>
+    request<{ snapshot: ResearchSnapshot; text: string }>(
+      `/projects/${encodeURIComponent(id)}/research/snapshots/${encodeURIComponent(snapshotId)}`,
+    ),
+  researchPlan: (id: string, expected_revision: string) =>
+    post<JobStarted>(`/projects/${encodeURIComponent(id)}/research/plan`, { expected_revision }),
+  collectPreview: (id: string, body: CollectParams & { expected_revision: string }) =>
+    post<CollectPreview>(`/projects/${encodeURIComponent(id)}/research/collect/preview`, body),
+  collect: (
+    id: string,
+    body: CollectParams & { expected_revision: string; network: true; plan_sha256: string; allow_hosts: string[] },
+  ) => post<JobStarted>(`/projects/${encodeURIComponent(id)}/research/collect`, body),
+  addSource: (
+    id: string,
+    body: { expected_revision: string; url: string; fetch: "queue" | "live"; network?: boolean; allow_hosts?: string[] },
+  ) => post<JobStarted>(`/projects/${encodeURIComponent(id)}/research/sources`, body),
   eventsUrl: (id: string, after: number) =>
     `${BASE}/jobs/${encodeURIComponent(id)}/events?after=${after}`,
 };
