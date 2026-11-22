@@ -4,7 +4,7 @@
 |---|---|---|
 | M1 | Local foundation, projects, engine adapter, draft jobs, read-only viewer | Done |
 | M2 | Script/outline editing, validation and editorial approval (G1) | Done (UI PRs #3 and #4; engine `draft-edit`, youtube-agent PR #11) |
-| M3 | Research claims, sources, evidence review and approval (G2) | Planned |
+| M3 | Research claims, sources, evidence review and approval (G2) | Specified ([milestone-3.md](milestone-3.md)); needs engine PRs E1–E3 |
 | M4 | Visual planning, candidate gallery, licensing and selection (G3) | Planned |
 | M5 | Narration studio: voices, pauses, per-scene preview, timing | Planned |
 | M6 | Rendering, captions, production metrics, video preview and final G4 review | Planned |

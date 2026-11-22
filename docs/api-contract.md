@@ -226,3 +226,39 @@ Editing needs an engine with `draft-edit` (D-117, the pinned `ENGINE_REF` `573eb
 | `engine_unavailable` / `engine_timeout` | 503 / 504 | as for other engine calls. After a timeout, reload before editing again. |
 
 **Approval and editing.** Any saved edit makes an existing approval `stale`, by the engine's rule. With this engine, approval sends the engine `revision` as `--expect-revision`, so the engine itself refuses to approve a version other than the one validated. The browser does not offer approval while edits are unsaved, and the server checks the revision.
+
+## Milestone 3 (proposed): research and G2
+
+**Status: proposed, not implemented.** The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
+
+| Method and path | Engine command | Body (main fields) | Response |
+|---|---|---|---|
+| `GET /projects/{id}/research` | `research-check --json` plus reads of `research.json`, `snapshots.json`, `evidence.json`, `research-review.json` | none | `report` (with `revision`), `sources`, `snapshots` (with `acquisition`), `evidence` (persistent `id`s), `reviews` (with `outdated_components`), `primary_source_attestations`, `history_summary {count, last_seq, chain_ok}`, `gate`, `network`, `editing`, `active_job_id` |
+| `GET /projects/{id}/research/snapshots/{snapshot_id}` | read only, hash-verified | none | metadata and plain text; `409 snapshot_tampered` |
+| `GET /projects/{id}/research/history` | read of `research-review.json` (`m5-review-0.2`) | query: `kind`, `subject_id`, `after_seq`, `limit` ≤200 | `{entries, next_after_seq, has_more, chain_ok}` |
+| `POST /projects/{id}/research/plan` | `research-plan --claim-provider=none --expect-revision --json` | `expected_revision` | 202 job |
+| `POST /projects/{id}/research/collect/preview` | `research-collect --dry-run --expect-revision --json` | `expected_revision`, `languages`, `claim_ids`, the limits | `{revision, search_hosts, provider_result_hosts, known_targets, hosts, plan_sha256}`: hosts are a permission scope (potential destinations), and result hosts appear only when searches are pending |
+| `POST /projects/{id}/research/collect` | `research-collect --search-provider=wikipedia --fetch=auto --allow-host=… --expect-revision --json` | as preview, plus `network: true`, `plan_sha256`, `allow_hosts` (exactly the confirmed preview's hosts; re-checked server-side immediately before the run) | 202 job |
+| `POST /projects/{id}/research/sources` | `research-add-url --fetch=queue\|live [--allow-host=H] --expect-revision --json` | `expected_revision`, `url`, `claim_id?`, `fetch`, and for live `network: true` and `allow_hosts: [url host]` | 202 job |
+| `POST /projects/{id}/research/documents` | `research-add-document … [--declared-url] [--edition] [--new-version-of] --expect-revision --json`, text on stdin | `expected_revision`, `title`, `language`, `citation`, `imported_by`, `edition?`, `declared_url?` (data only, never fetched), `original_published_at?`, `license?`, `note?`, `new_version_of?` (`doc-…`; complete provenance still required), `text` (≤400k characters) | `{source_id, snapshot_id, supersedes_snapshot_id, revision}` plus the research view |
+| `POST /projects/{id}/research/edit` | `research-edit --expect-revision --json [--dry-run]`, patch on stdin | `expected_revision`, `dry_run`, `operations` (the E2/E3 operation list) | `{result, research}` (no `research` for a dry run) |
+| `POST /projects/{id}/draft/narration/attest` | `narration-attest --expect-revision --json` | `expected_revision`, `reviewer`, `statement`, `segment_ids` | `{result}` plus the draft view |
+| `POST /projects/{id}/draft/narration/provenance-init` | `narration-provenance-init --expect-revision --json` | `expected_revision`, `confirm: true` (legacy fixture projects only) | `{result}` plus the draft view |
+| `POST /projects/{id}/research/approve` | `research-approve --expect-revision --json` | `expected_revision`, `reviewer`, `comment?`, `confirm: true` | the engine result plus the research view |
+| `POST /projects/{id}/research/apply` | `research-apply --expect-revision --json` | `expected_revision`, `confirm: true` | the research view plus the draft's G1 status |
+| `POST /projects/{id}/research/export` | `research-export --expect-revision --json` | `expected_revision` | written files (relative paths) |
+
+**Errors.**
+- **Conflicts (409):**
+  - `revision_conflict`, with `details.current_revision`; nothing written, never retried;
+  - `human_edit_conflict`;
+  - `approval_stale` / `g1_not_current`;
+  - `snapshot_tampered` / `history_tampered` / `narration_provenance_invalid` / `narration_provenance_missing`;
+  - `migration_required` (a `m5-review-0.1` review file; upgrade with `migrate_review_file`);
+  - `engine_conflict` / `unresolved_publication`;
+  - `job_conflict` / `project_busy`.
+- **Network:** `network_disabled` (403); `network_not_confirmed` (422, with `details.preview` when the plan or hosts changed).
+- **Validation (422):** `invalid_edit` (`details.errors[{loc, msg}]`, including `recheck_target_changed`, `recheck_exists`, `document_exists`); `research_not_ready` (`details.items`); `validation_error`.
+- **Engine (503/504/502):** `engine_unavailable`, `engine_timeout`, `engine_unsupported`.
+
+**Never exposed:** `--replace-plan`, `--force`, `--replace-output`, `--claim-provider=ollama|fixture` (fixture only with `YTA_ALLOW_FIXTURE_PROVIDER` in tests), and `resume`. `YTA_HTTP_CONTACT` is never set. A new setting, `YTA_RESEARCH_NETWORK` (default `true`), disables every network action when `false`.
