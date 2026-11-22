@@ -1,14 +1,14 @@
 # Milestone 2 — Verification Record
 
-**Status:** implemented and awaiting review. Two UI PRs and one engine PR:
+**Status:** done, 2026-11-22. Delivered in two UI PRs and one engine PR, each reviewed and merged by the owner:
 1. Validation and G1 approval: UI PR #3, merged.
 2. The engine edit command: `youtube-agent` PR #11, merged as `573ebdd`.
-3. The browser editor: `feat/m2-draft-editor`, this PR.
+3. The browser editor: UI PR #4, merged as `f12c44a`.
 
 **Dates:** 2026-11-21 (part 1) and 2026-11-22 (editor). **Machine:** macOS on Apple Silicon, uv 0.13.6, Node 26.13, Python 3.12.16.
 **Engine tested:** `youtube-agent` @ `573ebddd8513f63c5afc5e73a0200b84cccdd9de` (`ytagent 0.1.0`), now pinned in `ENGINE_REF`, as a fresh clone. Part 1 was verified at `d1325c4`, the previous pin. The UI PRs do not modify the engine repository.
 
-## The editor (this PR)
+## The editor (PR #4)
 - `GET /projects/{id}/draft/editable` returns the draft view plus `editing`: the engine revision, whether an edit is allowed now (an engine dry run), the reason when it is not, and the field limits.
 - `POST /projects/{id}/draft/edit` runs `ytagent draft-edit --expect-revision=<rev> --json [--dry-run]`, with the validated patch on stdin. It needs CSRF and is refused during jobs. A stale revision is 409 `revision_conflict` and nothing is written. Responses never include absolute paths.
 - Draft page:
@@ -68,7 +68,7 @@ Coverage of the M2-01, M2-02 and M2-03 editing tests:
 - **Found while testing:**
   - Typing a space that briefly made a field equal to the saved text reset the raw input; the editor now keeps it.
   - The approved panel did not mention unsaved edits; it now says the approval covers only the saved draft.
-  - First CI run of this PR: in the real-engine E2E, an approval clicked while "Load the latest draft" was still refetching sent the previous token, and the engine rightly refused it. Approval is now disabled while the draft is being validated again ("Validating the draft…").
+  - First CI run of PR #4: in the real-engine E2E, an approval clicked while "Load the latest draft" was still refetching sent the previous token, and the engine rightly refused it. Approval is now disabled while the draft is being validated again ("Validating the draft…").
 
 Coverage of the M2-02 and M2-04 approval test lists:
 - **CSRF and origin.** A wrong token or a foreign origin gets 403, and the engine is not invoked.
@@ -117,7 +117,7 @@ Engine-owned saves and the optimistic revision check are unchanged: every save i
 
 ## Review of PR #3 (findings 1–4), addressed
 1. **P1, race between the UI check and the engine snapshot.**
-   - Approval now coordinates with the engine: when `draft-check` reports a `revision`, the UI passes it to `draft-approve --expect-revision --json`. The engine checks it on the locked snapshot it approves, so a racing change is refused and nothing is written. The engine side is engine PR #11, not yet merged.
+   - Approval now coordinates with the engine: when `draft-check` reports a `revision`, the UI passes it to `draft-approve --expect-revision --json`. The engine checks it on the locked snapshot it approves, so a racing change is refused and nothing is written. The engine side is engine PR #11, not yet merged at the time (since merged as `573ebdd`).
    - Until `ENGINE_REF` has that command, a mismatched approval is never treated as success. The API answers 409 `approval_unconfirmed`, not 200, and records the engine's `review.json` record as unconfirmed (migration 0002). `GET /draft` reports `approval_confirmed: false`, the badge reads "G1 approval unconfirmed", and the form stays available. Validating and approving the current version confirms it.
    - Tests: `test_change_racing_into_engine_snapshot_is_not_treated_as_success` and `test_engine_refuses_a_race_under_its_lock`.
 2. **P2, token issued for an empty or incomplete report.**
@@ -146,7 +146,7 @@ Engine-owned saves and the optimistic revision check are unchanged: every save i
 - **Regenerating text after an edit** is deliberately not offered: the UI never passes `--replace-edits`.
 - **Approval race with an older engine.** With the pinned engine, approval always uses `--expect-revision`, so the engine prevents the race. The UI-token fallback (409 `approval_unconfirmed`) remains only for engines older than D-117, where editing is also off.
 
-## Definition of done (milestone-2.md), current state
+## Definition of done (milestone-2.md)
 - [x] A verified safe engine edit interface exists and is documented: `draft-edit` (D-117, engine PR #11, `573ebdd`), recorded in `engine-compatibility.md`.
 - [x] The browser can edit and save permitted fields without writing engine files directly.
 - [x] Edits preserve IDs, artifact consistency, human edit protection and optimistic concurrency. The engine enforces all of these, and the real-engine tests check them.
@@ -154,4 +154,4 @@ Engine-owned saves and the optimistic revision check are unchanged: every save i
 - [x] A named reviewer can explicitly approve G1 through the engine.
 - [x] Approval becomes stale after changes to bound files and never appears falsely current.
 - [x] M1 flows remain functional; all automated tests and the pinned real-engine script pass.
-- [ ] PR reviewed, with no automatic merge. A draft PR is open for the editor.
+- [x] PRs reviewed, with no automatic merge. UI PR #3 (one review round), engine PR #11 (one) and UI PR #4 (two) were reviewed, fixed and merged on the owner's explicit request.
