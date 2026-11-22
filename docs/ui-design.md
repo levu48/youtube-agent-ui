@@ -186,10 +186,11 @@ The M1 viewer becomes the editorial workspace. The workspace's **Edit Draft** bu
   - The Script tab also offers `Full script` (formatted) and `Markdown view` (the engine's `script.md`). Both show the saved draft, and say so while there are unsaved edits.
 - **Unsaved state:**
   - Edits are kept against the version loaded when editing started. Validating again does not drop them, and an alert warns if the engine's draft changed meanwhile.
-  - Leaving the page (reload, close, or an in-app link) asks first. Browser Back inside the app cannot be intercepted by the App Router.
+  - Leaving the page (reload, close, or an in-app link) asks first.
+  - Browser Back/Forward cannot be intercepted reliably by the App Router, so leaving that way is made harmless instead: while edits are unsaved, they and the draft version they are based on are kept in this tab's `sessionStorage`. Opening the draft page again restores them, with the note "Your unsaved edits were restored". Saving or discarding clears them. If the engine's draft changed meanwhile, the usual "changed since you started editing" alert shows and a save is refused by the engine's revision check. Nothing restored is sent until Save.
   - Approval is not offered while edits are unsaved: the approval panel says so, and the button is disabled.
 - **Save:**
-  - Shows a pending label while saving.
+  - Shows a pending label while saving. The fields stay editable: the patch and revision are fixed when Save is pressed, and anything typed while the save is pending stays unsaved on top of the newly saved version (a toast says so), to be saved next against the new revision.
   - Afterwards the page shows the engine's draft. A status line lists the files the engine changed, the storyboard sections it re-split and the visual briefs to check. A toast warns if the save made the G1 approval out of date.
   - Errors from the engine (field locations, downstream work, refusals) appear in an alert, and the edits stay.
 - **Conflict dialog** "The draft changed since you loaded it":
