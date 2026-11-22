@@ -1,6 +1,6 @@
 # Milestone 3 — Research Workspace: Claims, Sources, Evidence Review and G2 Approval
 
-**Status:** specification. Three separate engine PRs (E1, E2, E3) are prerequisites. E1 is implemented in engine PR #12 (D-118, draft, in review); E2, E3 and the UI work are not started.
+**Status:** specification. Three separate engine PRs (E1, E2, E3) are prerequisites. E1 is merged (engine PR #12, D-118, merge commit `8b1a766`); E2, E3 and the UI work are not started.
 
 **Goal:** a reviewer can research every factual statement of an approved draft in the browser, approve the research (G2) and apply it, with the `youtube-agent` engine as the only authority. This covers:
 - the claim inventory and its classification;
@@ -613,7 +613,7 @@ UI-0 (this spec) ─► E1 engine: research CLI contract ─► E2 engine: resea
 | PR | Repository | Depends on | Content | Verified by |
 |---|---|---|---|---|
 | UI-0 | UI | none | this specification, the compatibility section, the API contract, the roadmap | review |
-| E1 | engine | UI-0 reviewed | revision (including the storyboard's narration fingerprint); `--expect-revision` (including dry-run, and collect/add-url after the network phase); the fetch-plan preview; `--allow-host` (including Wikipedia and `robots.txt` redirects); `--json` and the error envelope; progress; the read contract. **Engine PR #12, draft.** | engine pytest, run locally while engine CI is blocked by billing |
+| E1 | engine | UI-0 reviewed | revision (including the storyboard's narration fingerprint); `--expect-revision` (including dry-run, and collect/add-url after the network phase); the fetch-plan preview; `--allow-host` (including Wikipedia and `robots.txt` redirects); `--json` and the error envelope; progress; the read contract. **Merged: engine PR #12, `8b1a766`.** | engine pytest, run locally while engine CI is blocked by billing |
 | E2 | engine | E1 | `research-edit`, persistent link and recheck IDs, `migrate_ids`, `migrate_review_file`, per-cited-snapshot rechecks, translation operations, recheck update/remove, component review basis, `review_outdated`, inventory-bound completeness, append-only hash-chained history, policy `m5-research-3` | engine pytest |
 | E3 | engine | E2 | `research-add-document` (`doc-` sources, schemas `m5-research-0.2`/`m5-snapshots-0.2`, excluded from network paths) with provenance and `acquisition`, `narration-provenance-init`, replacement ancestry, primary-source attestation and revocation, narration lineage, `narration-attest`, fail-closed provenance, provenance in the revision and the G2 binding | engine pytest |
 | UI-A | UI | E1 | research reads, the snapshot reader, plan jobs, the **engine fetch-plan preview with expected revision and an explicit confirmed-host allowlist** for collect and add-URL, Research navigation | backend, frontend, E2E, real-engine script, CI |

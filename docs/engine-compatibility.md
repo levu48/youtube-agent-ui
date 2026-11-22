@@ -189,7 +189,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 7. **Progress.** Collect is silent. **E1:** a stderr line per search and fetch.
 8. **Read contract.** **E1** documents `snapshots.json` and `pages/<sha256>.txt` as stable reads with hash verification.
 
-**E1 status.** Implemented in engine PR #12 (D-118), a draft in review. `ENGINE_REF` stays at `573ebdd` until it merges. Each UI PR pins the engine merge it needs.
+**E1 status.** Merged: engine PR #12 (D-118), merge commit `8b1a766`. `ENGINE_REF` stays at `573ebdd` until UI-A, the first UI PR that uses E1, bumps it. Each UI PR pins the engine merge it needs.
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
