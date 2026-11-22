@@ -219,6 +219,54 @@ class SystemConfig(BaseModel):
     default_language: Literal["en", "vi"] = "vi"
     default_model: str
     providers: list[str]
+    research_network: bool = True
+
+
+# ---------------------------------------------------------------------- research (M3)
+
+HEX64 = r"^[0-9a-f]{64}$"
+CLAIM_ID = r"^clm-[a-z0-9-]{3,40}$"
+
+
+class ResearchPlanRequest(_Strict):
+    expected_revision: str = Field(pattern=HEX64)
+
+
+class CollectPreviewRequest(_Strict):
+    """What a collection would do; the engine computes the hosts (no network)."""
+
+    expected_revision: str = Field(pattern=HEX64)
+    languages: Annotated[list[Literal["vi", "en"]], Field(min_length=1, max_length=2)] = [
+        "vi",
+        "en",
+    ]
+    claim_ids: Annotated[list[Annotated[str, Field(pattern=CLAIM_ID)]], Field(max_length=200)] = []
+    max_queries: int = Field(default=8, ge=0, le=50)
+    max_results_per_query: int = Field(default=5, ge=0, le=20)
+    max_pages: int = Field(default=15, ge=0, le=100)
+
+
+class CollectRequest(CollectPreviewRequest):
+    """Run a collection the reviewer confirmed: ``plan_sha256`` and ``allow_hosts`` must be
+    exactly those of the engine's current preview for the same parameters."""
+
+    network: Literal[True]
+    plan_sha256: str = Field(pattern=HEX64)
+    allow_hosts: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=253)]],
+        Field(min_length=1, max_length=200),
+    ]
+
+
+class AddSourceRequest(_Strict):
+    expected_revision: str = Field(pattern=HEX64)
+    url: str = Field(min_length=9, max_length=2000)
+    claim_ids: Annotated[list[Annotated[str, Field(pattern=CLAIM_ID)]], Field(max_length=200)] = []
+    fetch: Literal["queue", "live"] = "queue"
+    network: bool = False
+    allow_hosts: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=253)]], Field(max_length=1)
+    ] = []
 
 
 class JobCreated(BaseModel):

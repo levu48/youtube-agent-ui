@@ -318,3 +318,125 @@ def test_browser_edit_with_real_engine(real_client, settings):
     ed = real_client.get(f"{api}/draft/editable").json()["editing"]
     assert ed["can_edit"] is False and ed["reason_code"] == "downstream_artifacts"
     assert ed["paths"] == ["research-plan.json"]
+
+
+def test_research_workspace_with_real_engine(settings):
+    """M3 UI-A on the real engine (D-118, fixture search provider, offline): plan, fetch-plan
+    preview, a confirmed collection, a queued URL, verified snapshot text, and the same
+    revision from the CLI."""
+    settings.research_search_provider = "fixture"
+    api = "/api/v1/projects/hcm-demo"
+    with Client(create_app(settings)) as c:
+        assert c.post("/api/v1/projects", json=PROJECT).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+        draft = c.get(f"{api}/draft").json()
+        r = c.post(
+            f"{api}/draft/approve",
+            json={
+                "reviewer": "Nguyễn Văn A",
+                "confirm": True,
+                "review_token": draft["review_token"],
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        def job(resp) -> dict:
+            assert resp.status_code == 202, resp.text
+            jid = resp.json()["job_id"]
+            return wait_for(
+                lambda: (
+                    (j := c.get(f"/api/v1/jobs/{jid}").json())["status"] in ("succeeded", "failed")
+                    and j
+                ),
+                timeout=90,
+            )
+
+        view = c.get(f"{api}/research").json()
+        assert view["started"] is False and len(view["revision"]) == 64, view
+        done = job(c.post(f"{api}/research/plan", json={"expected_revision": view["revision"]}))
+        assert done["status"] == "succeeded", done
+        view = c.get(f"{api}/research").json()
+        assert view["started"] and view["report"]["claims"]
+
+        rev = view["revision"]
+        preview = c.post(f"{api}/research/collect/preview", json={"expected_revision": rev}).json()
+        assert preview["search_hosts"] == ["search.fixture.invalid"], preview
+        assert preview["hosts"] and preview["revision"] == rev
+        done = job(
+            c.post(
+                f"{api}/research/collect",
+                json={
+                    "expected_revision": rev,
+                    "network": True,
+                    "plan_sha256": preview["plan_sha256"],
+                    "allow_hosts": preview["hosts"],
+                },
+            )
+        )
+        assert done["status"] == "succeeded", done
+        logs = " ".join(e["data"].get("message", "") for e in done["events"] if e["type"] == "log")
+        assert "search vi" in logs  # engine progress lines reach the job log
+        # The placeholder claims match no fixture page, so fetch one the reviewer chose,
+        # confined to its own host (the fixture web stands in for the network).
+        url = "https://archive.fixture.invalid/tuyen-ngon-1945"
+        done = job(
+            c.post(
+                f"{api}/research/sources",
+                json={
+                    "expected_revision": c.get(f"{api}/research").json()["revision"],
+                    "url": url,
+                    "fetch": "live",
+                    "network": True,
+                    "allow_hosts": ["archive.fixture.invalid"],
+                },
+            )
+        )
+        assert done["status"] == "succeeded", done
+        view = c.get(f"{api}/research").json()
+        assert view["snapshots"] and {s["acquisition"] for s in view["snapshots"]} == {"fixture"}
+        page = c.get(f"{api}/research/snapshots/{view['snapshots'][0]['id']}").json()
+        assert page["text"]
+
+        done = job(
+            c.post(
+                f"{api}/research/sources",
+                json={
+                    "expected_revision": view["revision"],
+                    "url": "https://vi.wikipedia.org/wiki/Ba_Đình",
+                },
+            )
+        )
+        assert done["status"] == "succeeded", done
+        view = c.get(f"{api}/research").json()
+        assert any(s["user_supplied"] and s["state"] == "discovered" for s in view["sources"])
+        preview = c.post(
+            f"{api}/research/collect/preview", json={"expected_revision": view["revision"]}
+        ).json()
+        assert "vi.wikipedia.org" in preview["hosts"]  # a queued URL is a fetch target too
+
+        stale = c.post(f"{api}/research/collect/preview", json={"expected_revision": rev})
+        assert stale.status_code == 409 and stale.json()["error"]["code"] == "revision_conflict"
+
+        # The CLI sees the same research state and revision.
+        root = settings.projects_root_real / "hcm-demo"
+        out = subprocess.run(
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "ytagent",
+                "research-check",
+                f"--project-root={root}",
+                "--json",
+            ],
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert out.returncode == 14, out.stderr
+        assert json.loads(out.stdout)["revision"] == view["revision"]

@@ -1,6 +1,6 @@
 """Allowlisted argv builders for the engine CLI.
 
-Only six operations exist. Every free-text value is validated and passed as a single
+Only these operations exist. Every free-text value is validated and passed as a single
 ``--option=value`` argv element, so a value can never be parsed as another flag, and argv is
 never handed to a shell. Force/replace/paid options are not representable here.
 """
@@ -40,6 +40,10 @@ class EngineOp(StrEnum):
     DRAFT_CHECK = "draft-check"
     DRAFT_APPROVE = "draft-approve"
     DRAFT_EDIT = "draft-edit"
+    RESEARCH_CHECK = "research-check"
+    RESEARCH_PLAN = "research-plan"
+    RESEARCH_COLLECT = "research-collect"
+    RESEARCH_ADD_URL = "research-add-url"
 
 
 class ArgumentError(ValueError):
@@ -178,6 +182,144 @@ def draft_edit_args(root: Path, *, expect_revision: str, dry_run: bool = False) 
     argv.append("--json")
     if dry_run:
         argv.append("--dry-run")
+    return argv
+
+
+# ---------------------------------------------------------------------- research (M3)
+
+CLAIM_ID_RE = re.compile(r"^clm-[a-z0-9-]{3,40}$")
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+HOST_RE = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(?:\.{_LABEL})+$")
+SEARCH_PROVIDERS = ("wikipedia", "fixture")
+RESEARCH_LANGUAGES = ("vi", "en")
+COLLECT_LIMITS = {"max_queries": (0, 50), "max_results_per_query": (0, 20), "max_pages": (0, 100)}
+MAX_URL = 2000
+
+
+def _revision(value: str) -> str:
+    if not isinstance(value, str) or not REVISION_RE.fullmatch(value):
+        raise ArgumentError("expect_revision must be a 64-character hex revision")
+    return f"--expect-revision={value}"
+
+
+def check_host(host: str) -> str:
+    """A DNS host name (not an IP literal, not a single label such as localhost)."""
+    import ipaddress
+
+    if not isinstance(host, str) or not HOST_RE.fullmatch(host):
+        raise ArgumentError(f"not a host name: {host!r}")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    raise ArgumentError(f"IP addresses are not accepted as research hosts: {host!r}")
+
+
+def url_host(url: str) -> str:
+    """The host of an https URL accepted for research-add-url (validated, lower-case)."""
+    from urllib.parse import urlsplit
+
+    if (
+        not isinstance(url, str)
+        or len(url) > MAX_URL
+        or _CONTROL_RE.search(url)
+        or any(ch.isspace() for ch in url)
+    ):
+        raise ArgumentError("the URL is too long or contains spaces or control characters")
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        raise ArgumentError("only https URLs without credentials are accepted")
+    return check_host(parts.hostname.lower())
+
+
+def research_check_args(root: Path) -> list[str]:
+    return [EngineOp.RESEARCH_CHECK.value, _root(root), "--json"]
+
+
+def research_plan_args(root: Path, *, expect_revision: str) -> list[str]:
+    """The claim inventory, without an LLM (``--claim-provider=none``) and without network."""
+    return [
+        EngineOp.RESEARCH_PLAN.value,
+        _root(root),
+        "--claim-provider=none",
+        _revision(expect_revision),
+        "--json",
+    ]
+
+
+def research_collect_args(
+    root: Path,
+    *,
+    expect_revision: str,
+    search_provider: str,
+    languages: list[str],
+    claim_ids: list[str],
+    max_queries: int,
+    max_results_per_query: int,
+    max_pages: int,
+    allow_hosts: list[str] | None = None,
+    dry_run: bool = False,
+) -> list[str]:
+    """Search and fetch (engine D-118). Live network use needs one --allow-host per host the
+    reviewer confirmed; the engine refuses every other host, on requests and redirects."""
+    if search_provider not in SEARCH_PROVIDERS:
+        raise ArgumentError("search provider must be wikipedia or fixture")
+    langs = list(dict.fromkeys(languages))
+    if not langs or any(x not in RESEARCH_LANGUAGES for x in langs):
+        raise ArgumentError("languages must be vi and/or en")
+    argv = [
+        EngineOp.RESEARCH_COLLECT.value,
+        _root(root),
+        f"--search-provider={search_provider}",
+        "--fetch=auto",
+    ]
+    if len(langs) == 1:  # both is the engine's default (--languages takes several values)
+        argv.append(f"--languages={langs[0]}")
+    for cid in dict.fromkeys(claim_ids):
+        if not isinstance(cid, str) or not CLAIM_ID_RE.fullmatch(cid):
+            raise ArgumentError(f"not a claim id: {cid!r}")
+        argv.append(f"--claim={cid}")
+    for name, value in (
+        ("max_queries", max_queries),
+        ("max_results_per_query", max_results_per_query),
+        ("max_pages", max_pages),
+    ):
+        lo, hi = COLLECT_LIMITS[name]
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise ArgumentError(f"{name} must be an integer {lo}-{hi}")
+        argv.append(f"--{name.replace('_', '-')}={value}")
+    for host in dict.fromkeys(allow_hosts or []):
+        argv.append(f"--allow-host={check_host(host)}")
+    argv += [_revision(expect_revision), "--json"]
+    if dry_run:
+        argv.append("--dry-run")
+    return argv
+
+
+def research_add_url_args(
+    root: Path,
+    *,
+    expect_revision: str,
+    url: str,
+    claim_ids: list[str],
+    fetch: str,
+    allow_host: str | None = None,
+) -> list[str]:
+    """Add a researcher-chosen URL: queue it (no network) or fetch it now, confined to the
+    URL's own host, which the reviewer confirmed."""
+    host = url_host(url)
+    if fetch not in ("queue", "live", "fixture"):
+        raise ArgumentError("fetch must be queue or live")
+    argv = [EngineOp.RESEARCH_ADD_URL.value, _root(root), f"--url={url}", f"--fetch={fetch}"]
+    for cid in dict.fromkeys(claim_ids):
+        if not isinstance(cid, str) or not CLAIM_ID_RE.fullmatch(cid):
+            raise ArgumentError(f"not a claim id: {cid!r}")
+        argv.append(f"--claim={cid}")
+    if fetch == "live":
+        if allow_host != host:
+            raise ArgumentError("a live fetch must confirm exactly the URL's host")
+        argv.append(f"--allow-host={host}")
+    argv += [_revision(expect_revision), "--json"]
     return argv
 
 

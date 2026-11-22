@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app import __version__
+from app import research as RS
 from app.artifacts import (
     draft_files_present,
     engine_revision,
@@ -31,6 +32,9 @@ from app.ollama import model_installed, ollama_info
 from app.projects import ProjectRow, read_input
 from app.schemas import (
     TERMINAL_STATUSES,
+    AddSourceRequest,
+    CollectPreviewRequest,
+    CollectRequest,
     DiscoveredProject,
     DraftApprove,
     DraftEditRequest,
@@ -48,6 +52,7 @@ from app.schemas import (
     ProjectOut,
     ProjectRegister,
     ProjectSummary,
+    ResearchPlanRequest,
     Session,
     StatusSummary,
     SystemConfig,
@@ -89,6 +94,7 @@ async def system_config(s: State) -> SystemConfig:
         projects_root=home_relative(s.settings.projects_root_real),
         default_model=s.settings.default_model,
         providers=providers,
+        research_network=s.settings.research_network,
     )
 
 
@@ -703,6 +709,223 @@ async def create_draft_job(project_id: str, body: DraftJobCreate, s: State) -> J
         args,
         {"provider": body.provider, "model": model, "from_stage": body.from_stage},
     )
+    s.projects.touch(project_id)
+    return JobCreated(job_id=job.id, project_id=project_id, status=job.status)
+
+
+# ---------------------------------------------------------------------- research (M3)
+
+
+def _search_provider(s: AppState) -> str:
+    provider = s.settings.research_search_provider
+    if provider == "fixture" and s.settings.allow_fixture_provider:
+        return "fixture"
+    return "wikipedia"
+
+
+def _research_failure(res, what: str) -> ApiError:
+    """Map a failed research command (``--json`` error envelope, engine D-118)."""
+    jerr = _engine_json_error(res)
+    code = jerr.get("code")
+    message = redact(str(jerr.get("message") or "")).strip()
+    first = (
+        message.splitlines()[0].removeprefix("error:").strip()[:MAX_ENGINE_MESSAGE]
+        if message
+        else ""
+    )
+    if code == "revision_mismatch":
+        current = jerr.get("current_revision")
+        return ApiError(
+            409,
+            "revision_conflict",
+            "The research changed since you loaded it (another action, the CLI or a job). "
+            "Nothing was done. Reload, then try again.",
+            {"current_revision": current if engine_revision({"revision": current}) else None},
+        )
+    if code in ("g1_not_current", "approval_stale"):
+        return ApiError(409, code, first or "The required approval is not current.")
+    if code in ("invalid_input", "human_edit_conflict"):
+        return ApiError(422, "research_refused", f"The engine refused to {what}: {first}")
+    if code == "unresolved_publication":
+        return ApiError(
+            409,
+            "unresolved_publication",
+            "An interrupted engine write must be resolved in the CLI first. Nothing was done.",
+        )
+    if res.exit_code == 9:
+        return ApiError(409, "engine_conflict", "Another engine run is using this project.")
+    return ApiError(502, res.classification.code, first or res.classification.summary)
+
+
+@router.get("/projects/{project_id}/research")
+async def project_research(project_id: str, s: State) -> dict:
+    """The research workspace view: the engine's research-check report (with its revision),
+    plus read-only source, snapshot and evidence records. Nothing is written."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    report, report_error = None, None
+    try:
+        report = await s.engine.research_check(root)
+    except Exception as exc:  # normalised; the page shows why the report is missing
+        pe = to_public(exc, operation="research-check")
+        report_error = {"code": pe.code, "message": pe.message}
+    try:
+        records = {
+            "sources": RS.sources(root),
+            "snapshots": RS.snapshots(root),
+            "evidence": RS.evidence(root),
+            "records_error": None,
+        }
+    except RS.ResearchReadError as exc:
+        records = {
+            "sources": [],
+            "snapshots": [],
+            "evidence": [],
+            "records_error": {"code": exc.code, "message": exc.message},
+        }
+    status = await _status(s, row, fresh=False)
+    stage = next((st.model_dump() for st in status.stages if st.stage == "research"), None)
+    active = s.jobs.active_for(project_id)
+    return {
+        "report": report,
+        "report_error": report_error,
+        "revision": report.get("revision") if report else None,
+        "started": RS.research_started(root),
+        **records,
+        "stage": stage,
+        "network": {
+            "enabled": s.settings.research_network,
+            "search_provider": _search_provider(s),
+        },
+        "active_job_id": active.id if active else None,
+    }
+
+
+@router.get("/projects/{project_id}/research/snapshots/{snapshot_id}")
+async def research_snapshot(project_id: str, snapshot_id: str, s: State) -> dict:
+    row = s.projects.require(project_id)
+    try:
+        return RS.snapshot_text(s.projects.confined_root(row), snapshot_id)
+    except RS.ResearchReadError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from None
+
+
+@router.post("/projects/{project_id}/research/plan", response_model=JobCreated, status_code=202)
+async def research_plan_job(project_id: str, body: ResearchPlanRequest, s: State) -> JobCreated:
+    row = s.projects.require(project_id)
+    args = commands.research_plan_args(
+        s.projects.confined_root(row), expect_revision=body.expected_revision
+    )
+    job = s.jobs.submit(project_id, "research-plan", args, {})
+    s.projects.touch(project_id)
+    return JobCreated(job_id=job.id, project_id=project_id, status=job.status)
+
+
+def _collect_params(s: AppState, body: CollectPreviewRequest) -> dict:
+    return {
+        "expect_revision": body.expected_revision,
+        "search_provider": _search_provider(s),
+        "languages": list(body.languages),
+        "claim_ids": list(body.claim_ids),
+        "max_queries": body.max_queries,
+        "max_results_per_query": body.max_results_per_query,
+        "max_pages": body.max_pages,
+    }
+
+
+async def _preview(s: AppState, root, body: CollectPreviewRequest) -> dict:
+    res = await s.engine.collect_preview(root, **_collect_params(s, body))
+    if res.timed_out:
+        raise ApiError(504, "engine_timeout", "The engine did not answer in time.")
+    if not res.ok:
+        raise _research_failure(res, "preview the collection")
+    try:
+        data = res.json()
+    except ValueError:
+        data = None
+    keys = ("revision", "hosts", "known_targets", "plan_sha256", "search_hosts")
+    if not isinstance(data, dict) or not all(k in data for k in keys):
+        raise ApiError(502, "engine_bad_json", "The engine returned an unrecognised preview.")
+    return {
+        k: data.get(k)
+        for k in (*keys, "provider_result_hosts", "queries", "fetch", "search_provider")
+    }
+
+
+@router.post("/projects/{project_id}/research/collect/preview")
+async def research_collect_preview(project_id: str, body: CollectPreviewRequest, s: State) -> dict:
+    """Every host a collection with these parameters may contact (engine fetch plan, no
+    network). The hosts are a permission scope, not a forecast."""
+    row = s.projects.require(project_id)
+    return await _preview(s, s.projects.confined_root(row), body)
+
+
+def _network_allowed(s: AppState) -> None:
+    if not s.settings.research_network:
+        raise ApiError(
+            403,
+            "network_disabled",
+            "Network research actions are turned off (YTA_RESEARCH_NETWORK=false).",
+        )
+
+
+@router.post("/projects/{project_id}/research/collect", response_model=JobCreated, status_code=202)
+async def research_collect_job(project_id: str, body: CollectRequest, s: State) -> JobCreated:
+    """Run a confirmed collection. The preview is computed again immediately before the job
+    is queued; the job starts only if its plan and hosts are exactly what the reviewer
+    confirmed. The engine enforces the hosts on every request and redirect, and checks the
+    revision again before recording anything."""
+    _network_allowed(s)
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    preview = await _preview(s, root, body)
+    confirmed = sorted(set(body.allow_hosts))
+    if preview["plan_sha256"] != body.plan_sha256 or sorted(preview["hosts"]) != confirmed:
+        raise ApiError(
+            422,
+            "network_not_confirmed",
+            "What this collection would contact has changed since you confirmed it. Review "
+            "the new list of hosts and confirm again.",
+            {"preview": preview},
+        )
+    if not confirmed:
+        raise ApiError(422, "nothing_to_collect", "There is nothing to search or fetch.")
+    args = commands.research_collect_args(root, allow_hosts=confirmed, **_collect_params(s, body))
+    job = s.jobs.submit(project_id, "research-collect", args, {"hosts": confirmed})
+    s.projects.touch(project_id)
+    return JobCreated(job_id=job.id, project_id=project_id, status=job.status)
+
+
+@router.post("/projects/{project_id}/research/sources", response_model=JobCreated, status_code=202)
+async def research_add_source(project_id: str, body: AddSourceRequest, s: State) -> JobCreated:
+    """Add a URL: queue it (no network) or fetch it now, confined to its own host, which the
+    reviewer confirmed."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    try:
+        host = commands.url_host(body.url)
+    except commands.ArgumentError as exc:
+        raise ApiError(422, "validation_error", str(exc)) from None
+    fetch, allow = "queue", None
+    if body.fetch == "live":
+        _network_allowed(s)
+        if not body.network or body.allow_hosts != [host]:
+            raise ApiError(
+                422,
+                "network_not_confirmed",
+                f"Fetching this page contacts {host}: confirm exactly that host.",
+                {"host": host},
+            )
+        fetch, allow = ("fixture", None) if _search_provider(s) == "fixture" else ("live", host)
+    args = commands.research_add_url_args(
+        root,
+        expect_revision=body.expected_revision,
+        url=body.url,
+        claim_ids=list(body.claim_ids),
+        fetch=fetch,
+        allow_host=allow,
+    )
+    job = s.jobs.submit(project_id, "research-add-url", args, {"host": host, "fetch": body.fetch})
     s.projects.touch(project_id)
     return JobCreated(job_id=job.id, project_id=project_id, status=job.status)
 
