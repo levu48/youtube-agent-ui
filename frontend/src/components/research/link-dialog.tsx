@@ -10,14 +10,13 @@ import { OccurrencePicker } from "@/components/research/occurrence-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useOccurrenceSearch } from "@/hooks/use-occurrence-search";
 import { useResearchEdit } from "@/hooks/use-research-edit";
 import {
   EVIDENCE_ROLES,
   SOURCE_TYPES,
   type EditOperation,
-  type EditResult,
   type EvidenceRole,
-  type Occurrence,
   type ResearchSnapshot,
   type SourceType,
 } from "@/lib/api";
@@ -41,10 +40,6 @@ export const NO_TRANSLATION: Translation = {
   translator: "",
   original_language: "",
 };
-
-function occurrencesOf(r: EditResult | null, field: string): Occurrence[] {
-  return r?.occurrences.find((o) => o.op_index === 0 && o.field === field)?.occurrences ?? [];
-}
 
 export function snapshotLabel(s: ResearchSnapshot): string {
   return `${s.title ?? s.id}${s.acquisition === "imported" ? " (imported)" : s.acquisition === "fixture" ? " (test data)" : ""}`;
@@ -109,6 +104,8 @@ export function translationOp(t: Translation, occurrence: number | null) {
 export const translationReady = (t: Translation) =>
   Boolean(t.snapshot_id && t.quote.trim() && t.language.trim().length >= 2 && t.speaker.trim() && t.equivalence_note.trim());
 
+const OCC_FIELDS = ["quote", "original_quote"] as const;
+
 /** Link a passage of a snapshot to a claim (`evidence.add`). A dry run first finds every
  * occurrence of the quote (and of the original passage, for a traced translation). */
 export function LinkDialog({
@@ -140,15 +137,7 @@ export function LinkDialog({
   const [root, setRoot] = useState("");
   const [translated, setTranslated] = useState(false);
   const [tr, setTr] = useState<Translation>(NO_TRANSLATION);
-  const [found, setFound] = useState<EditResult | null>(null);
-  const [occ, setOcc] = useState<number | null>(null);
-  const [occOrig, setOccOrig] = useState<number | null>(null);
 
-  const invalidate = () => {
-    setFound(null);
-    setOcc(null);
-    setOccOrig(null);
-  };
   const op = (withOcc: boolean): EditOperation => ({
     op: "evidence.add",
     claim_id: claimId,
@@ -166,21 +155,17 @@ export function LinkDialog({
         }
       : {}),
   });
-  const quotes = occurrencesOf(found, "quote");
-  const originals = occurrencesOf(found, "original_quote");
+  // Results belong to this exact operation under this revision; any edit to the form hides them.
+  const occs = useOccurrenceSearch(JSON.stringify([revision, op(false)]), OCC_FIELDS);
+  const found = occs.found;
+  const quotes = occs.occurrences("quote");
+  const originals = occs.occurrences("original_quote");
+  const occ = occs.pick("quote");
+  const occOrig = occs.pick("original_quote");
   const ready = claimId && quote.trim() && role && explanation.trim() && (!translated || translationReady(tr));
   const chosen = found && (quotes.length === 1 || occ) && (!translated || originals.length === 1 || occOrig);
 
-  const find = async () => {
-    try {
-      const r = await edit.dryRun([op(false)]);
-      setFound(r);
-      setOcc(occurrencesOf(r, "quote").length === 1 ? 1 : null);
-      setOccOrig(occurrencesOf(r, "original_quote").length === 1 ? 1 : null);
-    } catch {
-      setFound(null);
-    }
-  };
+  const find = () => occs.search(() => edit.dryRun([op(false)]));
   const link = async () => {
     try {
       await edit.run([op(true)]);
@@ -205,7 +190,7 @@ export function LinkDialog({
             <Label htmlFor={`${id}-claim`}>
               Claim<span className="text-danger"> *</span>
             </Label>
-            <select id={`${id}-claim`} value={claimId} onChange={(e) => { setClaimId(e.target.value); invalidate(); }}
+            <select id={`${id}-claim`} value={claimId} onChange={(e) => setClaimId(e.target.value)}
               className="w-full rounded-md border bg-surface px-2 py-1.5 text-sm">
               <option value="">Choose…</option>
               {claims.map((c) => (
@@ -215,14 +200,14 @@ export function LinkDialog({
               ))}
             </select>
           </div>
-          <TextField label="Passage (exact text of the snapshot)" value={quote} onChange={(v) => { setQuote(v); invalidate(); }} required rows={3}
+          <TextField label="Passage (exact text of the snapshot)" value={quote} onChange={(v) => setQuote(v)} required rows={3}
             max={2000} lang={snapshot.language ?? undefined} />
           <div className="grid gap-2 sm:grid-cols-2">
             <div className="space-y-1">
               <Label htmlFor={`${id}-role`}>
                 Role<span className="text-danger"> *</span>
               </Label>
-              <select id={`${id}-role`} value={role} onChange={(e) => { setRole(e.target.value as EvidenceRole); invalidate(); }}
+              <select id={`${id}-role`} value={role} onChange={(e) => setRole(e.target.value as EvidenceRole)}
                 className="w-full rounded-md border bg-surface px-2 py-1.5 text-sm">
                 <option value="">Choose…</option>
                 {EVIDENCE_ROLES.map((r) => (
@@ -234,7 +219,7 @@ export function LinkDialog({
             </div>
             <div className="space-y-1">
               <Label htmlFor={`${id}-type`}>Source type</Label>
-              <select id={`${id}-type`} value={sourceType} onChange={(e) => { setSourceType(e.target.value as SourceType); invalidate(); }}
+              <select id={`${id}-type`} value={sourceType} onChange={(e) => setSourceType(e.target.value as SourceType)}
                 className="w-full rounded-md border bg-surface px-2 py-1.5 text-sm">
                 <option value="">Not set (unknown)</option>
                 {SOURCE_TYPES.map((t) => (
@@ -250,19 +235,19 @@ export function LinkDialog({
               Imported document: never counts as an independent root, and as a primary source only once this edition is attested.
             </p>
           ) : null}
-          <TextField label="Explanation" value={explanation} onChange={(v) => { setExplanation(v); invalidate(); }} min={MIN.explanation} required
+          <TextField label="Explanation" value={explanation} onChange={(v) => setExplanation(v)} min={MIN.explanation} required
             hint="Why this passage bears on the claim." />
-          <LineField label="Evidence root (optional)" value={root} onChange={(v) => { setRoot(v); invalidate(); }}
+          <LineField label="Evidence root (optional)" value={root} onChange={(v) => setRoot(v)}
             hint="The same value for mirrors, translations and pages derived from one original." />
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={translated} onChange={(e) => { setTranslated(e.target.checked); invalidate(); }} />
+            <input type="checkbox" checked={translated} onChange={(e) => setTranslated(e.target.checked)} />
             This passage is a translation of another-language original
           </label>
-          {translated ? <TranslationFields value={tr} onChange={(t) => { setTr(t); invalidate(); }} snapshots={snapshots} /> : null}
+          {translated ? <TranslationFields value={tr} onChange={setTr} snapshots={snapshots} /> : null}
           {found ? (
             <div className="space-y-2">
-              <OccurrencePicker label="Passage" occurrences={quotes} value={occ} onChange={setOcc} lang={snapshot.language ?? undefined} />
-              {translated ? <OccurrencePicker label="Original passage" occurrences={originals} value={occOrig} onChange={setOccOrig} /> : null}
+              <OccurrencePicker label="Passage" occurrences={quotes} value={occ} onChange={(n) => occs.setPick("quote", n)} lang={snapshot.language ?? undefined} />
+              {translated ? <OccurrencePicker label="Original passage" occurrences={originals} value={occOrig} onChange={(n) => occs.setPick("original_quote", n)} /> : null}
             </div>
           ) : null}
           <EditError error={edit.error} onReload={edit.reload} />
@@ -272,8 +257,8 @@ export function LinkDialog({
             Cancel
           </Button>
           {!found ? (
-            <Button onClick={find} disabled={!ready || edit.pending || !revision}>
-              <Search aria-hidden /> {edit.pending ? "Finding…" : "Find the passage"}
+            <Button onClick={find} disabled={!ready || occs.searching || !revision}>
+              <Search aria-hidden /> {occs.searching ? "Finding…" : "Find the passage"}
             </Button>
           ) : (
             <Button onClick={link} disabled={!chosen || edit.pending}>

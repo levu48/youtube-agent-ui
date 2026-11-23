@@ -13,6 +13,7 @@ import { OccurrencePicker } from "@/components/research/occurrence-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useOccurrenceSearch } from "@/hooks/use-occurrence-search";
 import { useResearchEdit } from "@/hooks/use-research-edit";
 import {
   CLAIM_FLAGS,
@@ -23,7 +24,6 @@ import {
   type ClaimKind,
   type EvidenceRecord,
   type EvidenceRole,
-  type Occurrence,
   type PlanClaim,
   type ResearchClaim,
   type ResearchView,
@@ -341,8 +341,11 @@ function LinkEditDialog({ projectId, revision, link, onClose }: { projectId: str
     ...(f.role !== link.role ? { role: f.role } : {}),
     ...(f.explanation !== link.explanation ? { explanation: f.explanation } : {}),
     ...(f.source_type !== link.source_type ? { source_type: f.source_type } : {}),
-    ...(f.evidence_root.trim() && f.evidence_root !== (link.evidence_root ?? "") ? { evidence_root: f.evidence_root.trim() } : {}),
+    ...(f.evidence_root.trim() && f.evidence_root.trim() !== (link.evidence_root ?? "") ? { evidence_root: f.evidence_root.trim() } : {}),
   };
+  // The engine can change an evidence root but not remove one (`evidence.update` refuses null
+  // and empty values), so an emptied field must block the save, never be dropped silently.
+  const rootCleared = Boolean(link.evidence_root) && !f.evidence_root.trim();
   const run = async (ops: Record<string, unknown>[], done: string) => {
     try {
       await edit.run(ops as { op: string }[]);
@@ -386,6 +389,12 @@ function LinkEditDialog({ projectId, revision, link, onClose }: { projectId: str
         </div>
         <TextField label="Explanation" value={f.explanation} onChange={(v) => setF({ ...f, explanation: v })} min={MIN.explanation} required />
         <LineField label="Evidence root" value={f.evidence_root} onChange={(v) => setF({ ...f, evidence_root: v })} />
+        {rootCleared ? (
+          <p role="alert" className="text-sm text-danger">
+            An evidence root cannot be removed, only changed. To link this passage without a root, remove the link and link the passage
+            again; a decision that relied on it then becomes outdated.
+          </p>
+        ) : null}
         <EditError error={edit.error} onReload={edit.reload} />
         <DialogFooter className="sm:justify-between">
           <Button variant="destructive" onClick={() => setRemoving(true)} disabled={edit.pending}>
@@ -396,7 +405,7 @@ function LinkEditDialog({ projectId, revision, link, onClose }: { projectId: str
               Cancel
             </Button>
             <Button onClick={() => run([{ op: "evidence.update", link_id: link.id, ...changes }], "Link saved")}
-              disabled={!Object.keys(changes).length || !f.explanation.trim() || edit.pending}>
+              disabled={!Object.keys(changes).length || rootCleared || !f.explanation.trim() || edit.pending}>
               {edit.pending ? "Saving…" : "Save link"}
             </Button>
           </div>
@@ -417,6 +426,8 @@ function LinkEditDialog({ projectId, revision, link, onClose }: { projectId: str
   );
 }
 
+const ORIGINAL = ["original_quote"] as const;
+
 /** Trace a translated passage to its original (`evidence.set_translation`), or stop marking
  * it as a translation (`evidence.clear_translation`). */
 function TraceDialog({ projectId, view, link, onClose }: { projectId: string; view: ResearchView; link: EvidenceRecord; onClose: () => void }) {
@@ -428,8 +439,6 @@ function TraceDialog({ projectId, view, link, onClose }: { projectId: string; vi
           equivalence_note: traced.equivalence_note, translator: link.translator ?? "" }
       : NO_TRANSLATION,
   );
-  const [found, setFound] = useState<Occurrence[] | null>(null);
-  const [occ, setOcc] = useState<number | null>(null);
   const op = (n: number | null) => ({
     op: "evidence.set_translation",
     link_id: link.id,
@@ -437,16 +446,11 @@ function TraceDialog({ projectId, view, link, onClose }: { projectId: string; vi
     ...(tr.translator.trim() ? { translator: tr.translator.trim() } : {}),
     ...(tr.language.trim() ? { original_language: tr.language.trim() } : {}),
   });
-  const find = async () => {
-    try {
-      const r = await edit.dryRun([op(null)]);
-      const o = r.occurrences.find((x) => x.field === "original_quote")?.occurrences ?? [];
-      setFound(o);
-      setOcc(o.length === 1 ? 1 : null);
-    } catch {
-      setFound(null);
-    }
-  };
+  // Results belong to this exact operation under this revision; any edit to the form hides them.
+  const occs = useOccurrenceSearch(JSON.stringify([view.revision, op(null)]), ORIGINAL);
+  const found = occs.found ? occs.occurrences("original_quote") : null;
+  const occ = occs.pick("original_quote");
+  const find = () => occs.search(() => edit.dryRun([op(null)]));
   const save = async (ops: Record<string, unknown>[], msg: string) => {
     try {
       await edit.run(ops as { op: string }[]);
@@ -464,8 +468,8 @@ function TraceDialog({ projectId, view, link, onClose }: { projectId: string; vi
           <DialogDescription>An untraced translation never supports a quotation.</DialogDescription>
         </DialogHeader>
         <blockquote className="border-l-2 pl-2 text-sm">{link.quote}</blockquote>
-        <TranslationFields value={tr} onChange={(t) => { setTr(t); setFound(null); }} snapshots={view.snapshots.filter((s) => s.id !== link.snapshot_id)} />
-        {found ? <OccurrencePicker label="Original passage" occurrences={found} value={occ} onChange={setOcc} /> : null}
+        <TranslationFields value={tr} onChange={setTr} snapshots={view.snapshots.filter((s) => s.id !== link.snapshot_id)} />
+        {found ? <OccurrencePicker label="Original passage" occurrences={found} value={occ} onChange={(n) => occs.setPick("original_quote", n)} /> : null}
         <EditError error={edit.error} onReload={edit.reload} />
         <DialogFooter className="sm:justify-between">
           {link.is_translation ? (
@@ -481,8 +485,8 @@ function TraceDialog({ projectId, view, link, onClose }: { projectId: string; vi
               Cancel
             </Button>
             {!found ? (
-              <Button onClick={find} disabled={!translationReady(tr) || edit.pending}>
-                {edit.pending ? "Finding…" : "Find the original"}
+              <Button onClick={find} disabled={!translationReady(tr) || occs.searching || !view.revision}>
+                {occs.searching ? "Finding…" : "Find the original"}
               </Button>
             ) : (
               <Button onClick={() => save([op(occ)], "Translation traced")} disabled={!occ || edit.pending}>

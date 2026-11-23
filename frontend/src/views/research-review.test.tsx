@@ -1,8 +1,10 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FixturePanel } from "@/components/draft/fixture-panel";
+import { AddClaimDialog } from "@/components/research/add-claim-dialog";
+import { LinkDialog } from "@/components/research/link-dialog";
 import type { ResearchView as View } from "@/lib/api";
 import { mockFetch, renderWithQuery } from "@/test/utils";
 import { ResearchView } from "@/views/research-view";
@@ -288,5 +290,204 @@ describe("fixture text panel", () => {
     expect(calls.find((c) => c.method === "POST")!.body).toEqual({
       expected_revision: REV, reviewer: "Trần Thị B", statement: "Tôi viết lại toàn bộ câu mở đầu.", segment_ids: ["seg-0000000000000002"],
     });
+  });
+});
+
+// A dry run that answers late must never repopulate the picker: request A starts, the form
+// changes, request B starts, B answers, then A answers. Only B's occurrences may be used.
+type Reply = { status?: number; json: unknown };
+function heldDryRuns(onWrite: () => Reply = () => EDITED(view())) {
+  const held: { body: Record<string, unknown>; answer: (r: Reply) => void }[] = [];
+  const route = (b?: unknown) =>
+    (b as { dry_run?: boolean }).dry_run
+      ? new Promise<Reply>((answer) => held.push({ body: b as Record<string, unknown>, answer }))
+      : onWrite();
+  return { held, route };
+}
+const occurrencesFound = (field: string, contexts: string[]): Reply => ({
+  json: { result: { status: "would_publish", created: [], occurrences: [{ op_index: 0, field,
+    occurrences: contexts.map((context, i) => ({ n: i + 1, start: i * 10, end: i * 10 + 4, context })) }] } },
+});
+const opOf = (b: Record<string, unknown>) => (b.operations as Record<string, unknown>[])[0];
+
+describe("occurrence searches answering out of order", () => {
+  it("link dialog: only the latest search's occurrences can be chosen and linked", async () => {
+    const { held, route } = heldDryRuns();
+    const calls = mockFetch({ "POST /projects/p1/research/edit": route });
+    const v = view();
+    renderWithQuery(
+      <LinkDialog open onOpenChange={vi.fn()} projectId="p1" revision={REV} snapshot={v.snapshots[0]} snapshots={v.snapshots}
+        initialQuote="Ngày" claims={[{ id: CID, assertion: ASSERTION }]} />,
+    );
+    const user = userEvent.setup();
+    const dialog = screen.getByRole("dialog", { name: "Link to claim" });
+    await user.selectOptions(within(dialog).getByLabelText(/^Claim/), CID);
+    await user.selectOptions(within(dialog).getByLabelText(/^Role/), "supports");
+    await user.type(within(dialog).getByLabelText(/Explanation/), "Văn bản nêu ngày của sự kiện này.");
+    await user.click(within(dialog).getByRole("button", { name: /Find the passage/ }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    const passage = within(dialog).getByLabelText(/^Passage/);
+    await user.clear(passage);
+    await user.type(passage, "tháng");
+    // The outdated search does not block a search for the form as it is now.
+    await user.click(within(dialog).getByRole("button", { name: /Find the passage/ }));
+    await waitFor(() => expect(held).toHaveLength(2));
+    expect(opOf(held[0].body).quote).toBe("Ngày");
+    expect(opOf(held[1].body).quote).toBe("tháng");
+    await act(async () => held[1].answer(occurrencesFound("quote", ["B một", "B hai"])));
+    await act(async () => held[0].answer(occurrencesFound("quote", ["A only"])));
+    expect(within(dialog).getByText(/found 2 times/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/A only/)).toBeNull();
+    const link = within(dialog).getByRole("button", { name: /Link evidence/ });
+    expect(link).toBeDisabled(); // A's single occurrence was not auto-picked
+    await user.click(within(dialog).getByRole("radio", { name: /#2/ }));
+    await user.click(link);
+    const writes = () => calls.filter((c) => c.method === "POST" && c.path === "/projects/p1/research/edit" && !(c.body as { dry_run?: boolean }).dry_run);
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(opOf(writes()[0].body as Record<string, unknown>)).toMatchObject({ quote: "tháng", occurrence: 2 });
+  });
+
+  it("link dialog: editing the form hides results and picks from the earlier search", async () => {
+    const { held, route } = heldDryRuns();
+    mockFetch({ "POST /projects/p1/research/edit": route });
+    const v = view();
+    renderWithQuery(
+      <LinkDialog open onOpenChange={vi.fn()} projectId="p1" revision={REV} snapshot={v.snapshots[0]} snapshots={v.snapshots}
+        initialQuote="Ngày" claims={[{ id: CID, assertion: ASSERTION }]} />,
+    );
+    const user = userEvent.setup();
+    const dialog = screen.getByRole("dialog", { name: "Link to claim" });
+    await user.selectOptions(within(dialog).getByLabelText(/^Claim/), CID);
+    await user.selectOptions(within(dialog).getByLabelText(/^Role/), "supports");
+    await user.type(within(dialog).getByLabelText(/Explanation/), "Văn bản nêu ngày của sự kiện này.");
+    await user.click(within(dialog).getByRole("button", { name: /Find the passage/ }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    await act(async () => held[0].answer(occurrencesFound("quote", ["một", "hai"])));
+    await user.click(within(dialog).getByRole("radio", { name: /#1/ }));
+    await user.selectOptions(within(dialog).getByLabelText(/^Role/), "context");
+    expect(within(dialog).queryByRole("button", { name: /Link evidence/ })).toBeNull();
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    // Restoring the searched input does not bring the old result or pick back: search again.
+    await user.selectOptions(within(dialog).getByLabelText(/^Role/), "supports");
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: /Find the passage/ })).toBeEnabled();
+  });
+
+  it("add claim: a late answer for the previous scene is dropped", async () => {
+    const created = { json: { result: { status: "published", created: [{ op_index: 0, kind: "claim", id: "clm-002" }], occurrences: [] }, research: view() } };
+    const { held, route } = heldDryRuns(() => created);
+    const calls = mockFetch({ "POST /projects/p1/research/edit": route });
+    const scenes = [
+      { id: "scene-001", section_id: "s1", narration: "Ngày 2 tháng 9 năm 1945." },
+      { id: "scene-002", section_id: "s1", narration: "Ngày ấy, Ngày lịch sử." },
+    ];
+    renderWithQuery(<AddClaimDialog open onOpenChange={vi.fn()} projectId="p1" revision={REV} anchor={{ kind: "excerpt" }} scenes={scenes} lang="vi" />);
+    const user = userEvent.setup();
+    const dialog = screen.getByRole("dialog", { name: "Add a claim" });
+    await user.selectOptions(within(dialog).getByLabelText(/^Scene/), "scene-002");
+    await user.type(within(dialog).getByLabelText(/^Excerpt/), "Ngày");
+    await user.type(within(dialog).getByLabelText(/^Assertion/), "Ngày 2 tháng 9 là ngày lịch sử.");
+    await user.selectOptions(within(dialog).getByLabelText(/^Kind/), "factual");
+    await user.click(within(dialog).getByRole("button", { name: "Find in the narration" }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    await user.selectOptions(within(dialog).getByLabelText(/^Scene/), "scene-001");
+    expect(within(dialog).queryByRole("button", { name: "Add claim" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Find in the narration" }));
+    await waitFor(() => expect(held).toHaveLength(2));
+    await act(async () => held[1].answer(occurrencesFound("excerpt", ["Ngày 2 tháng 9"])));
+    await act(async () => held[0].answer(occurrencesFound("excerpt", ["Ngày ấy", "Ngày lịch sử"])));
+    expect(within(dialog).queryByRole("radio")).toBeNull();
+    expect(within(dialog).getByText(/found once/)).toHaveTextContent("Ngày 2 tháng 9");
+    await user.click(within(dialog).getByRole("button", { name: "Add claim" }));
+    await waitFor(() => expect(posted(calls).filter((b) => !b.dry_run)).toHaveLength(1));
+    expect(opOf(posted(calls).filter((b) => !b.dry_run)[0]).anchor).toEqual({ scene_id: "scene-001", excerpt: "Ngày", occurrence: 1 });
+  });
+
+  it("add claim: a search abandoned by a change is ignored even after the input is restored", async () => {
+    const { held, route } = heldDryRuns();
+    mockFetch({ "POST /projects/p1/research/edit": route });
+    const scenes = [
+      { id: "scene-001", section_id: "s1", narration: "Ngày 2 tháng 9 năm 1945." },
+      { id: "scene-002", section_id: "s1", narration: "Ngày ấy, Ngày lịch sử." },
+    ];
+    renderWithQuery(<AddClaimDialog open onOpenChange={vi.fn()} projectId="p1" revision={REV} anchor={{ kind: "excerpt" }} scenes={scenes} lang="vi" />);
+    const user = userEvent.setup();
+    const dialog = screen.getByRole("dialog", { name: "Add a claim" });
+    await user.selectOptions(within(dialog).getByLabelText(/^Scene/), "scene-002");
+    await user.type(within(dialog).getByLabelText(/^Excerpt/), "Ngày");
+    await user.type(within(dialog).getByLabelText(/^Assertion/), "Ngày 2 tháng 9 là ngày lịch sử.");
+    await user.selectOptions(within(dialog).getByLabelText(/^Kind/), "factual");
+    await user.click(within(dialog).getByRole("button", { name: "Find in the narration" }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    await user.selectOptions(within(dialog).getByLabelText(/^Scene/), "scene-001");
+    await user.selectOptions(within(dialog).getByLabelText(/^Scene/), "scene-002");
+    await act(async () => held[0].answer(occurrencesFound("excerpt", ["Ngày ấy"])));
+    expect(within(dialog).queryByText(/found once/)).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Add claim" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Find in the narration" })).toBeEnabled();
+  });
+
+  it("trace translation: a late answer for the previous original passage is dropped", async () => {
+    const SNAP2 = "snap-00000000000000f2";
+    const base = view();
+    const v = view({
+      snapshots: [...base.snapshots, { ...base.snapshots[0], id: SNAP2, title: "Déclaration (original)", language: "fr", document_provenance: null,
+        acquisition: "retrieved" }],
+      evidence: [{ id: "ev-00000000000000e1", claim_id: CID, snapshot_id: SNAP, start: 0, end: 4, quote: "Ngày", role: "supports",
+        explanation: "Văn bản nêu ngày diễn ra sự kiện.", source_type: "secondary", evidence_root: null, original_language: null,
+        is_translation: true, translation_of: null, translator: null }],
+    } as unknown as Partial<View>);
+    const { held, route } = heldDryRuns(() => EDITED(v));
+    const { calls, user } = setup({ "POST /projects/p1/research/edit": route }, v);
+    await openReview(user);
+    await user.click(screen.getByRole("button", { name: /Trace to original/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Trace the translation to its original" });
+    await user.selectOptions(within(dialog).getByLabelText(/Snapshot with the original/), SNAP2);
+    const original = within(dialog).getByLabelText(/Original passage/);
+    await user.type(original, "jour");
+    await user.type(within(dialog).getByLabelText(/Language of the original/), "fr");
+    await user.type(within(dialog).getByLabelText(/Who spoke or wrote/), "Hồ Chí Minh");
+    await user.type(within(dialog).getByLabelText(/Equivalence note/), "Bản dịch giữ nguyên nghĩa của từ gốc tiếng Pháp.");
+    await user.click(within(dialog).getByRole("button", { name: "Find the original" }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    await user.clear(original);
+    await user.type(original, "le 2 septembre");
+    await user.click(within(dialog).getByRole("button", { name: "Find the original" }));
+    await waitFor(() => expect(held).toHaveLength(2));
+    await act(async () => held[1].answer(occurrencesFound("original_quote", ["le 2 septembre 1945", "dès le 2 septembre"])));
+    await act(async () => held[0].answer(occurrencesFound("original_quote", ["ce jour"])));
+    expect(within(dialog).getByText(/found 2 times/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/ce jour/)).toBeNull();
+    const save = within(dialog).getByRole("button", { name: "Save translation" });
+    expect(save).toBeDisabled();
+    await user.click(within(dialog).getByRole("radio", { name: /#1/ }));
+    await user.click(save);
+    await waitFor(() => expect(posted(calls).filter((b) => !b.dry_run)).toHaveLength(1));
+    expect(opOf(posted(calls).filter((b) => !b.dry_run)[0]).translation_of).toMatchObject({ quote: "le 2 septembre", occurrence: 1 });
+  });
+});
+
+describe("evidence root", () => {
+  it("never reports a save while silently keeping a root the reviewer emptied", async () => {
+    const v = view({
+      evidence: [{ id: "ev-00000000000000e1", claim_id: CID, snapshot_id: SNAP, start: 0, end: 4, quote: "Ngày", role: "supports",
+        explanation: "Văn bản nêu ngày diễn ra sự kiện.", source_type: "secondary", evidence_root: "root-tuyen-ngon", original_language: null,
+        is_translation: false, translation_of: null, translator: null }],
+    } as unknown as Partial<View>);
+    const { calls, user } = setup({ "POST /projects/p1/research/edit": () => EDITED(v) }, v);
+    await openReview(user);
+    await user.click(screen.getByRole("button", { name: /Edit link/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit evidence link" });
+    const root = within(dialog).getByLabelText(/Evidence root/);
+    await user.clear(root);
+    await user.type(within(dialog).getByLabelText(/Explanation/), " Thêm chi tiết.");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("cannot be removed, only changed");
+    const save = within(dialog).getByRole("button", { name: "Save link" });
+    expect(save).toBeDisabled();
+    await user.type(root, "root-ban-in");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    await user.click(save);
+    await waitFor(() => expect(posted(calls)).toHaveLength(1));
+    expect(opOf(posted(calls)[0])).toMatchObject({ op: "evidence.update", evidence_root: "root-ban-in" });
   });
 });

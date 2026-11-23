@@ -9,13 +9,16 @@ import { OccurrencePicker } from "@/components/research/occurrence-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useOccurrenceSearch } from "@/hooks/use-occurrence-search";
 import { useResearchEdit } from "@/hooks/use-research-edit";
-import { CLAIM_FLAGS, CLAIM_KINDS, type ClaimFlag, type ClaimKind, type EditOperation, type Occurrence, type SceneNarration } from "@/lib/api";
+import { CLAIM_FLAGS, CLAIM_KINDS, type ClaimFlag, type ClaimKind, type EditOperation, type SceneNarration } from "@/lib/api";
 import { humanize } from "@/lib/status";
 
 /** Where a new claim is anchored: an uncovered sentence the engine reported (its own offsets),
  * or an excerpt the reviewer types, which the engine locates. */
 export type NewAnchor = { kind: "sentence"; scene_id: string; start: number; end: number; text: string } | { kind: "excerpt" };
+
+const EXCERPT = ["excerpt"] as const;
 
 export function AddClaimDialog({
   open,
@@ -43,8 +46,6 @@ export function AddClaimDialog({
   const [kind, setKind] = useState<ClaimKind | "">("");
   const [flags, setFlags] = useState<ClaimFlag[]>([]);
   const [contested, setContested] = useState(false);
-  const [found, setFound] = useState<Occurrence[] | null>(null);
-  const [occ, setOcc] = useState<number | null>(null);
 
   const op = (n: number | null): EditOperation => ({
     op: "claims.add",
@@ -56,6 +57,10 @@ export function AddClaimDialog({
     ...(flags.length ? { flags } : {}),
     ...(contested ? { contested: true } : {}),
   });
+  // Results belong to this exact operation under this revision; any edit to the form hides them.
+  const occs = useOccurrenceSearch(JSON.stringify([revision, op(null)]), EXCERPT);
+  const found = occs.found ? occs.occurrences("excerpt") : null;
+  const occ = occs.pick("excerpt");
   const ready = assertion.trim() && kind && (fromSentence || (scene && excerpt.trim()));
   const save = async () => {
     try {
@@ -66,16 +71,7 @@ export function AddClaimDialog({
       /* shown; input kept */
     }
   };
-  const find = async () => {
-    try {
-      const r = await edit.dryRun([op(null)]);
-      const o = r.occurrences.find((x) => x.field === "excerpt")?.occurrences ?? [];
-      setFound(o);
-      setOcc(o.length === 1 ? 1 : null);
-    } catch {
-      setFound(null);
-    }
-  };
+  const find = () => occs.search(() => edit.dryRun([op(null)]));
   const needFind = !fromSentence && !found;
 
   return (
@@ -99,7 +95,7 @@ export function AddClaimDialog({
                 <Label htmlFor={`${id}-scene`}>
                   Scene<span className="text-danger"> *</span>
                 </Label>
-                <select id={`${id}-scene`} value={scene} onChange={(e) => { setScene(e.target.value); setFound(null); }}
+                <select id={`${id}-scene`} value={scene} onChange={(e) => setScene(e.target.value)}
                   className="w-full rounded-md border bg-surface px-2 py-1.5 text-sm">
                   <option value="">Choose…</option>
                   {scenes.map((s) => (
@@ -109,7 +105,7 @@ export function AddClaimDialog({
                   ))}
                 </select>
               </div>
-              <TextField label="Excerpt (exact narration text)" value={excerpt} onChange={(v) => { setExcerpt(v); setFound(null); }} required rows={2}
+              <TextField label="Excerpt (exact narration text)" value={excerpt} onChange={setExcerpt} required rows={2}
                 max={2000} lang={lang} />
             </>
           )}
@@ -145,7 +141,7 @@ export function AddClaimDialog({
             <input type="checkbox" checked={contested} onChange={(e) => setContested(e.target.checked)} />
             Contested
           </label>
-          {found ? <OccurrencePicker label="Excerpt" occurrences={found} value={occ} onChange={setOcc} lang={lang} /> : null}
+          {found ? <OccurrencePicker label="Excerpt" occurrences={found} value={occ} onChange={(n) => occs.setPick("excerpt", n)} lang={lang} /> : null}
           <EditError error={edit.error} onReload={edit.reload} />
         </div>
         <DialogFooter>
@@ -153,8 +149,8 @@ export function AddClaimDialog({
             Cancel
           </Button>
           {needFind ? (
-            <Button onClick={find} disabled={!ready || edit.pending || !revision}>
-              {edit.pending ? "Finding…" : "Find in the narration"}
+            <Button onClick={find} disabled={!ready || occs.searching || !revision}>
+              {occs.searching ? "Finding…" : "Find in the narration"}
             </Button>
           ) : (
             <Button onClick={save} disabled={!ready || edit.pending || !revision || (!fromSentence && !occ)}>
