@@ -270,3 +270,24 @@
 
 ### Not covered (manual)
 - **Live Wikipedia and Ollama:** the M3 smoke test with a real search and a real model is recorded by hand, not in CI.
+
+## Manual smoke test: live Wikipedia and Ollama (2026-11-23)
+
+Run in a real browser (Playwright) against the app on `127.0.0.1`, with the pinned engine `fb6bffc`, Ollama `qwen3:8b` on Apple Silicon, `YTA_RESEARCH_SEARCH_PROVIDER=wikipedia` and `YTA_RESEARCH_NETWORK=true`. Projects and data were in a temporary folder. `YTA_HTTP_CONTACT` was not set.
+
+1. **Create and draft.** A Vietnamese project, "Tuyên ngôn Độc lập của Việt Nam ngày 2 tháng 9 năm 1945" (2 minutes). The Ollama draft streamed 70 log lines live and **succeeded** (exit 0) in about 110 s. The outline is `generated_by: ollama:qwen3:8b`.
+2. **G1** approved in the browser.
+3. **Prepare claims:** 14 claims from the model's narration, each shown with its tool suggestion, which is not a verdict.
+4. **Live search.** The engine's preview listed exactly two hosts, `en.wikipedia.org` and `vi.wikipedia.org`, and **Start search** stayed disabled until they were confirmed. The collection job **succeeded** in 19 s:
+   - 22 sources, all on the two confirmed hosts;
+   - 15 fetched and extracted (the page cap), 7 queued.
+
+   The relevant pages were among them, for example *Tuyên ngôn độc lập (Việt Nam Dân chủ Cộng hòa)*, *Quảng trường Ba Đình*, *2 tháng 9*, *Hồ Chí Minh* and *Việt Nam Dân chủ Cộng hòa*.
+5. **Reader and evidence.** The *Tuyên ngôn độc lập* snapshot opened as "Retrieved by the engine · 7,529 characters", with its address, retrieval time and hash. A passage was linked to a claim as **context**, after the dry run located it.
+6. **Validation.** **Validate research** ran the engine's check: not approvable, with 15 blocking items (`human_review_required`, `no_sources`, `completeness_missing`). This is expected, because no decision was recorded. G2 stays "Not approved", with G1 "Approved".
+7. **CLI interop.** `research-check` from the engine repository reported the same revision the browser had loaded, with 14 claims and the one context link. `production-status` reported `G1 editorial: approved` and `G2 research: needs_review`; `draft-check` was OK and approved.
+
+**Observations (engine-side; the UI shows the engine's data as stored):**
+- **Infobox text:** extraction runs infobox labels into their values (for example "Ra đời2 tháng 9 năm 1945"). This is harmless for passage matching, since quotes are exact text, but worth improving in the engine's HTML-to-text step.
+- **Search relevance:** the claim-derived Wikipedia queries also return off-topic pages (*Campuchia Hậu Angkor*, *Lịch sử Trung Quốc*, a television listings page, *Tóc Tiên*). The reviewer decides what to read and link, and nothing is linked automatically.
+- **Successful G2:** not part of this run, because the narration was the model's draft with no decisions recorded. A successful G2 is covered by the required real-engine test with the genuinely sourced documents.
