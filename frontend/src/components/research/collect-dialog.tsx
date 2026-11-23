@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Globe } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +25,18 @@ import { displayUrl } from "@/lib/status";
  * A preview belongs to one research revision. When the parent's revision changes (a job,
  * the CLI or another tab changed the research), the preview and its confirmation no longer
  * count: both are derived from the current revision, so a stale list can never be confirmed.
+ *
+ * The same holds for the parameters: each check is numbered and keyed by the revision and the
+ * exact parameters it was sent with. Only the latest check's answer is kept, and only while
+ * its key matches the current revision and parameters; changing a parameter, checking again
+ * or closing the dialog drops any answer still in flight.
  */
+
+type Checked = { key: string; params: CollectParams; preview: CollectPreview };
+
+function previewKey(revision: string, p: CollectParams): string {
+  return JSON.stringify([revision, [...p.languages].sort(), p.claim_ids, p.max_queries, p.max_results_per_query, p.max_pages]);
+}
 export function CollectDialog({
   open,
   onOpenChange,
@@ -42,46 +53,68 @@ export function CollectDialog({
   const [langs, setLangs] = useState<("vi" | "en")[]>(["vi", "en"]);
   const [maxPages, setMaxPages] = useState(15);
   const qc = useQueryClient();
-  const [checked, setChecked] = useState<CollectPreview | null>(null);
+  const [checked, setChecked] = useState<Checked | null>(null);
   // The plan the reviewer ticked; it counts only for that exact plan.
   const [confirmedPlan, setConfirmedPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const preview = checked && checked.revision === revision ? checked : null;
-  const outdated = checked !== null && preview === null;
-  const confirmed = preview !== null && confirmedPlan === preview.plan_sha256;
+  // Number of the latest check; an answer to any earlier one is ignored.
+  const latest = useRef(0);
+  const [checking, setChecking] = useState<number | null>(null); // the check in flight, if current
   const params: CollectParams = { languages: langs, claim_ids: [], max_queries: 8, max_results_per_query: 5, max_pages: maxPages };
+  const key = previewKey(revision, params);
+  const current =
+    checked && checked.key === key && checked.preview.revision === revision ? checked : null;
+  const preview = current?.preview ?? null;
+  // Only a research change is explained: a parameter change already cleared the preview.
+  const outdated = checked !== null && checked.preview.revision !== revision;
+  const confirmed = preview !== null && confirmedPlan === preview.plan_sha256;
 
   const reset = () => {
+    latest.current += 1; // drop any check still in flight
+    setChecking(null);
     setChecked(null);
     setConfirmedPlan(null);
     setError(null);
   };
   const check = useMutation({
-    mutationFn: () => api.collectPreview(projectId, { ...params, expected_revision: revision }),
-    onSuccess: (p) => {
-      setChecked(p);
+    mutationFn: (v: { seq: number; key: string; params: CollectParams; revision: string }) =>
+      api.collectPreview(projectId, { ...v.params, expected_revision: v.revision }),
+    onSuccess: (p, v) => {
+      if (v.seq !== latest.current) return; // a later check, a parameter change or a close
+      setChecked({ key: v.key, params: v.params, preview: p });
       setConfirmedPlan(null);
       setError(null);
     },
-    onError: (e) => setError((e as Error).message),
+    onError: (e, v) => {
+      if (v.seq === latest.current) setError((e as Error).message);
+    },
+    onSettled: (_d, _e, v) => setChecking((s) => (s === v.seq ? null : s)),
   });
+  const startCheck = () => {
+    reset();
+    const seq = latest.current;
+    setChecking(seq);
+    check.mutate({ seq, key, params, revision });
+  };
   const run = useMutation({
-    mutationFn: () =>
+    mutationFn: (c: Checked) =>
       api.collect(projectId, {
-        ...params,
-        expected_revision: preview!.revision,
+        ...c.params,
+        expected_revision: c.preview.revision,
         network: true,
-        plan_sha256: preview!.plan_sha256,
-        allow_hosts: preview!.hosts,
+        plan_sha256: c.preview.plan_sha256,
+        allow_hosts: c.preview.hosts,
       }),
     onSuccess: (r) => {
       onOpenChange(false);
       reset();
       onStarted(r.job_id);
     },
-    onError: (e) => {
+    onError: (e, c) => {
       if (e instanceof ApiError && e.code === "network_not_confirmed" && e.details?.preview) {
-        setChecked(e.details.preview as CollectPreview); // what changed: confirm again
+        const fresh = e.details.preview as CollectPreview; // what changed: confirm again
+        latest.current += 1;
+        setChecked({ key: previewKey(fresh.revision, c.params), params: c.params, preview: fresh });
         setConfirmedPlan(null);
         // The research may have a newer revision: reload it so this preview can count.
         void qc.invalidateQueries({ queryKey: qk.research(projectId) });
@@ -181,10 +214,13 @@ export function CollectDialog({
           </p>
         ) : null}
         <DialogFooter>
-          <Button variant="outline" onClick={() => check.mutate()} disabled={!langs.length || check.isPending}>
-            {check.isPending ? "Checking…" : checked ? "Check again" : "Check what would be contacted"}
+          <Button variant="outline" onClick={startCheck} disabled={!langs.length || checking !== null}>
+            {checking !== null ? "Checking…" : checked ? "Check again" : "Check what would be contacted"}
           </Button>
-          <Button onClick={() => run.mutate()} disabled={!preview || !confirmed || run.isPending}>
+          <Button
+            onClick={() => current && run.mutate(current)}
+            disabled={!current || !confirmed || checking !== null || run.isPending}
+          >
             <Globe aria-hidden /> {run.isPending ? "Starting…" : "Start search"}
           </Button>
         </DialogFooter>

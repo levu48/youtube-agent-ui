@@ -27,7 +27,12 @@ function hostOf(url: string): string | null {
 }
 
 /** Add a researcher-chosen URL: queue it (nothing is contacted), or fetch it now, confined to
- * its own host, which the reviewer confirms. */
+ * its own host, which the reviewer confirms.
+ *
+ * The confirmation is for one host at one research revision, in one sitting: it no longer
+ * counts once the URL's host or the revision changes, and every close (Cancel, Escape, the
+ * close button, an outside click, or the parent closing the dialog) clears it and returns the
+ * fetch mode to the safe default, queue. The typed URL is kept. */
 export function AddUrlDialog({
   open,
   onOpenChange,
@@ -45,10 +50,22 @@ export function AddUrlDialog({
 }) {
   const [url, setUrl] = useState("");
   const [live, setLive] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmedFor, setConfirmedFor] = useState<{ host: string; revision: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wasOpen, setWasOpen] = useState(open);
   const id = useId();
   const host = hostOf(url.trim());
+  const confirmed = live && host !== null && confirmedFor?.host === host && confirmedFor.revision === revision;
+
+  // Any close, however it happens, ends the confirmation (adjusting state on a prop change).
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (!open) {
+      setLive(false);
+      setConfirmedFor(null);
+      setError(null);
+    }
+  }
 
   const add = useMutation({
     mutationFn: () =>
@@ -62,7 +79,7 @@ export function AddUrlDialog({
       onOpenChange(false);
       setUrl("");
       setLive(false);
-      setConfirmed(false);
+      setConfirmedFor(null);
       setError(null);
       onStarted(r.job_id);
     },
@@ -83,7 +100,7 @@ export function AddUrlDialog({
             value={url}
             onChange={(e) => {
               setUrl(e.target.value);
-              setConfirmed(false);
+              setConfirmedFor(null);
             }}
             placeholder="https://"
             aria-invalid={url.trim() && !host ? true : undefined}
@@ -96,7 +113,11 @@ export function AddUrlDialog({
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium">When</legend>
           <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name={`${id}-when`} checked={!live} onChange={() => setLive(false)} />
+            <input type="radio" name={`${id}-when`} checked={!live} onChange={() => {
+                setLive(false);
+                setConfirmedFor(null);
+              }}
+            />
             Queue it: nothing is contacted now (a later search fetches it, after you confirm its host)
           </label>
           <label className="flex items-center gap-2 text-sm">
@@ -112,7 +133,11 @@ export function AddUrlDialog({
         </fieldset>
         {live && host ? (
           <label className="flex items-start gap-2 rounded-lg border bg-surface-muted p-3 text-sm">
-            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmedFor(e.target.checked ? { host, revision } : null)}
+            />
             <span>
               I confirm that <span className="font-mono">{host}</span> may be contacted. Redirects to other hosts are
               refused.

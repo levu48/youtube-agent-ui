@@ -46,7 +46,7 @@
 | Backend unit tests (fake engine) | 225 passed, including 24 research API tests |
 | Real-engine integration (`scripts/test-real-engine.sh`, engine `fb6bffc`, fixture providers) | 6 passed, 0 skipped |
 | Frontend lint, `tsc --noEmit` | clean |
-| Frontend component and unit tests (Vitest) | 79 passed, including 12 for the research view and 1 for `displayUrl` |
+| Frontend component and unit tests (Vitest) | 86 passed, including 19 for the research view and 1 for `displayUrl` |
 | Production build | passes (built by the E2E web server) |
 | Playwright, fake engine | 16 passed |
 | Playwright, real engine | 15 passed, 1 allowed skip (slow-job cancel, covered by the fake run) |
@@ -83,6 +83,18 @@
 - **Stale search confirmations.** A collect preview counts only while its `revision` equals the page's current revision, and the checkbox counts only for the `plan_sha256` that was ticked. A revision change while the dialog is open hides the host list and the confirmation, explains why, and needs a new check. A preview still in flight when the revision changed is also discarded. After `network_not_confirmed`, the dialog reloads the research view so the server's new preview can count.
 - **Cancel wording.** The cancel dialog names the job type: "Stop preparing claims?", "Stop this source search?", "Stop adding this source?". Draft jobs keep their wording, and unknown types fall back to "Stop this job?". Research job cards no longer show the draft-only "Ollama · model" line.
 - Each new test was checked to fail without its fix.
+
+### Second review revision (PR #7)
+- **Collect previews follow the current parameters.**
+  - Each check is numbered and keyed by the revision and the exact parameters it was sent with (languages, claims, limits). Only the latest check's answer is kept, and it is shown and confirmable only while its key matches the current revision and parameters.
+  - Changing a parameter, checking again or closing the dialog drops any answer still in flight, including overlapping answers that arrive out of order.
+  - The search runs with the parameters stored alongside the preview it confirms.
+  - The backend's `network_not_confirmed` check is unchanged.
+- **Add URL confirmation does not carry over.**
+  - It is bound to one host and one research revision.
+  - Every close (Cancel, Escape, the close button, an outside click, or the parent closing the dialog) clears it and resets the fetch mode to queue. The typed URL is kept.
+  - Editing the URL still clears it.
+- **Tests.** Seven new component tests: a languages change, a page-limit change and reverse-order answers for the preview; Cancel, Escape, a revision change and a URL edit for Add URL. All but the URL-edit test fail against the previous dialogs; the URL-edit test pins behaviour that already worked.
 
 ### Not covered (manual or later)
 - **Live Wikipedia:** a real search with `YTA_RESEARCH_SEARCH_PROVIDER=wikipedia`, using the network, is left for the manual M3 smoke test. Automated tests never use the network.

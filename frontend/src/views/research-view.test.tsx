@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -309,6 +309,164 @@ describe("sidebar", () => {
     expect(dialog).toHaveTextContent("you can search again later");
     expect(dialog.textContent).not.toMatch(/draft|generation/i);
     expect(screen.queryByText(/Ollama/)).not.toBeInTheDocument();
+  });
+
+  describe("search previews answer only the request that is current", () => {
+    type Pending = { body: { languages: string[]; max_pages: number; expected_revision: string }; resolve: (p: object) => void };
+    function deferredPreviews() {
+      const pending: Pending[] = [];
+      const routes = {
+        "POST /projects/p1/research/collect/preview": (body?: unknown) =>
+          new Promise<{ json: unknown }>((resolve) =>
+            pending.push({ body: body as Pending["body"], resolve: (p) => resolve({ json: p }) }),
+          ),
+        "POST /projects/p1/research/collect": () => ({ status: 202, json: { job_id: "job-1", project_id: "p1", status: "queued" } }),
+      };
+      return { pending, routes };
+    }
+    const VI_ONLY = { ...PREVIEW, hosts: ["vi.wikipedia.org"], search_hosts: ["vi.wikipedia.org"],
+      provider_result_hosts: ["vi.wikipedia.org"], known_targets: [], plan_sha256: "e".repeat(64) };
+    const hostList = (d: HTMLElement) => within(d).queryByRole("list", { name: "Hosts that may be contacted" });
+    const confirmBox = (d: HTMLElement) => within(d).queryByRole("checkbox", { name: /I confirm that these hosts/ });
+    const startBtn = (d: HTMLElement) => within(d).getByRole("button", { name: /Start search/ });
+
+    async function openSearch(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(await screen.findByRole("tab", { name: "Sources" }));
+      await user.click(screen.getByRole("button", { name: /Search Wikipedia/ }));
+      return screen.findByRole("dialog", { name: "Search for sources" });
+    }
+    const collectBody = (calls: ReturnType<typeof setup>["calls"]) =>
+      calls.find((c) => c.method === "POST" && c.path === "/projects/p1/research/collect")?.body as Record<string, unknown> | undefined;
+
+    it("drops an answer for languages that were changed while it was pending", async () => {
+      const { pending, routes } = deferredPreviews();
+      const { calls, user } = setup(routes);
+      const dialog = await openSearch(user);
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      await user.click(within(dialog).getByRole("checkbox", { name: "English" }));
+      await act(async () => pending[0].resolve(PREVIEW));
+      expect(hostList(dialog)).not.toBeInTheDocument();
+      expect(confirmBox(dialog)).not.toBeInTheDocument();
+      expect(startBtn(dialog)).toBeDisabled();
+
+      // A check with the current languages is shown, and collects with exactly those.
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(2));
+      expect(pending[1].body.languages).toEqual(["vi"]);
+      await act(async () => pending[1].resolve(VI_ONLY));
+      expect(hostList(dialog)).toHaveTextContent("vi.wikipedia.org");
+      expect(hostList(dialog)).not.toHaveTextContent("en.wikipedia.org");
+      expect(startBtn(dialog)).toBeDisabled();
+      await user.click(confirmBox(dialog)!);
+      await user.click(startBtn(dialog));
+      await waitFor(() => expect(collectBody(calls)).toBeTruthy());
+      expect(collectBody(calls)).toMatchObject({ languages: ["vi"], plan_sha256: "e".repeat(64), allow_hosts: ["vi.wikipedia.org"] });
+    });
+
+    it("drops an answer for a page limit that was changed while it was pending", async () => {
+      const { pending, routes } = deferredPreviews();
+      const { calls, user } = setup(routes);
+      const dialog = await openSearch(user);
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      const pages = within(dialog).getByRole("spinbutton", { name: /Pages to fetch at most/ });
+      fireEvent.change(pages, { target: { value: "3" } });
+      await act(async () => pending[0].resolve(PREVIEW));
+      expect(hostList(dialog)).not.toBeInTheDocument();
+      expect(confirmBox(dialog)).not.toBeInTheDocument();
+      expect(startBtn(dialog)).toBeDisabled();
+
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(2));
+      expect(pending[1].body.max_pages).toBe(3);
+      await act(async () => pending[1].resolve(PREVIEW));
+      await user.click(confirmBox(dialog)!);
+      await user.click(startBtn(dialog));
+      await waitFor(() => expect(collectBody(calls)).toBeTruthy());
+      expect(collectBody(calls)).toMatchObject({ max_pages: 3, plan_sha256: SHA });
+    });
+
+    it("keeps only the latest preview when two answers arrive in reverse order", async () => {
+      const { pending, routes } = deferredPreviews();
+      const { calls, user } = setup(routes);
+      const dialog = await openSearch(user);
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(1));
+      await user.click(within(dialog).getByRole("checkbox", { name: "English" }));
+      await user.click(within(dialog).getByRole("button", { name: /Check what would be contacted/ }));
+      await waitFor(() => expect(pending).toHaveLength(2));
+
+      await act(async () => pending[1].resolve(VI_ONLY)); // the latest answers first
+      expect(hostList(dialog)).toHaveTextContent("vi.wikipedia.org");
+      await act(async () => pending[0].resolve(PREVIEW)); // then the superseded one
+      expect(hostList(dialog)).not.toHaveTextContent("en.wikipedia.org");
+      expect(hostList(dialog)).not.toHaveTextContent("queued.example.net");
+
+      await user.click(confirmBox(dialog)!);
+      await user.click(startBtn(dialog));
+      await waitFor(() => expect(collectBody(calls)).toBeTruthy());
+      expect(collectBody(calls)).toMatchObject({ languages: ["vi"], plan_sha256: "e".repeat(64), allow_hosts: ["vi.wikipedia.org"] });
+    });
+  });
+
+  describe("an Add URL confirmation does not outlive its sitting", () => {
+    const URL_ = "https://vi.wikipedia.org/wiki/Ba_Đình";
+    async function confirmLive(user: ReturnType<typeof userEvent.setup>, first = true) {
+      if (first) await user.click(await screen.findByRole("tab", { name: "Sources" }));
+      await user.click(screen.getByRole("button", { name: /Add URL/ }));
+      const dialog = await screen.findByRole("dialog", { name: "Add a URL" });
+      const field = within(dialog).getByLabelText(/Page address/);
+      if (!(field as HTMLInputElement).value) await user.type(field, URL_);
+      await user.click(within(dialog).getByRole("radio", { name: /Fetch it now/ }));
+      await user.click(within(dialog).getByRole("checkbox", { name: /vi\.wikipedia\.org may be contacted/ }));
+      expect(within(dialog).getByRole("button", { name: "Fetch page" })).toBeEnabled();
+      return dialog;
+    }
+    async function expectFreshOnReopen(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole("button", { name: /Add URL/ }));
+      const dialog = await screen.findByRole("dialog", { name: "Add a URL" });
+      expect(within(dialog).getByRole("radio", { name: /Queue it/ })).toBeChecked();
+      expect(within(dialog).queryByRole("checkbox", { name: /may be contacted/ })).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole("radio", { name: /Fetch it now/ }));
+      expect(within(dialog).getByRole("checkbox", { name: /may be contacted/ })).not.toBeChecked();
+      expect(within(dialog).getByRole("button", { name: "Fetch page" })).toBeDisabled();
+    }
+
+    it("is cleared by Cancel, and the dialog reopens in queue mode", async () => {
+      const { user } = setup();
+      const dialog = await confirmLive(user);
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await expectFreshOnReopen(user);
+    });
+
+    it("is cleared by Escape", async () => {
+      const { user } = setup();
+      await confirmLive(user);
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await expectFreshOnReopen(user);
+    });
+
+    it("no longer counts once the research revision changes", async () => {
+      let current = view();
+      const { client, user } = setup({ "GET /projects/p1/research": () => ({ json: current }) });
+      const dialog = await confirmLive(user);
+      current = view({ revision: "c".repeat(64) });
+      await act(() => client.invalidateQueries({ queryKey: ["project", "p1", "research"] }));
+      await waitFor(() => expect(within(dialog).getByRole("checkbox", { name: /may be contacted/ })).not.toBeChecked());
+      expect(within(dialog).getByRole("button", { name: "Fetch page" })).toBeDisabled();
+    });
+
+    it("no longer counts once the URL is edited, even on the same host", async () => {
+      const { user } = setup();
+      const dialog = await confirmLive(user);
+      const field = within(dialog).getByLabelText(/Page address/);
+      await user.type(field, "x");
+      expect(within(dialog).getByRole("checkbox", { name: /vi\.wikipedia\.org may be contacted/ })).not.toBeChecked();
+      expect(within(dialog).getByRole("button", { name: "Fetch page" })).toBeDisabled();
+    });
   });
 
   it("links Research only inside a project", () => {
