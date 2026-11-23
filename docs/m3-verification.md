@@ -46,7 +46,7 @@
 | Backend unit tests (fake engine) | 225 passed, including 24 research API tests |
 | Real-engine integration (`scripts/test-real-engine.sh`, engine `fb6bffc`, fixture providers) | 6 passed, 0 skipped |
 | Frontend lint, `tsc --noEmit` | clean |
-| Frontend component and unit tests (Vitest) | 76 passed, including 9 for the research view and 1 for `displayUrl` |
+| Frontend component and unit tests (Vitest) | 79 passed, including 12 for the research view and 1 for `displayUrl` |
 | Production build | passes (built by the E2E web server) |
 | Playwright, fake engine | 16 passed |
 | Playwright, real engine | 15 passed, 1 allowed skip (slow-job cancel, covered by the fake run) |
@@ -77,6 +77,12 @@
   - the snapshot reader: a malformed ID (422), an unknown snapshot (404), and altered text (409 `snapshot_tampered`);
   - CSRF on every mutation, and the refusal while another job runs.
   - **Gap:** `nothing_to_collect` (an empty preview) has no test.
+
+### Review revision (PR #7)
+- **Research refresh after jobs.** A finished job invalidates `qk.research(projectId)` explicitly, not only through the project-key prefix. The Research page reloads the engine's report, sources, snapshots and revision when a plan, collect or add-URL job completes. Tests cover a live completion in the research view and the invalidated key in the job card.
+- **Stale search confirmations.** A collect preview counts only while its `revision` equals the page's current revision, and the checkbox counts only for the `plan_sha256` that was ticked. A revision change while the dialog is open hides the host list and the confirmation, explains why, and needs a new check. A preview still in flight when the revision changed is also discarded. After `network_not_confirmed`, the dialog reloads the research view so the server's new preview can count.
+- **Cancel wording.** The cancel dialog names the job type: "Stop preparing claims?", "Stop this source search?", "Stop adding this source?". Draft jobs keep their wording, and unknown types fall back to "Stop this job?". Research job cards no longer show the draft-only "Ollama · model" line.
+- Each new test was checked to fail without its fix.
 
 ### Not covered (manual or later)
 - **Live Wikipedia:** a real search with `YTA_RESEARCH_SEARCH_PROVIDER=wikipedia`, using the network, is left for the manual M3 smoke test. Automated tests never use the network.

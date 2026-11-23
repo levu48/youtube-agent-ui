@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Globe } from "lucide-react";
 import { useState } from "react";
 
@@ -14,12 +14,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError, api, type CollectParams, type CollectPreview } from "@/lib/api";
+import { qk } from "@/lib/queries";
 import { displayUrl } from "@/lib/status";
 
 /**
  * Search and fetch, with an explicit confirmation of every host (engine D-118). The engine
  * previews the plan without contacting anything; the reviewer confirms that exact list; the
  * backend checks it again before the job starts, and the engine refuses any other host.
+ *
+ * A preview belongs to one research revision. When the parent's revision changes (a job,
+ * the CLI or another tab changed the research), the preview and its confirmation no longer
+ * count: both are derived from the current revision, so a stale list can never be confirmed.
  */
 export function CollectDialog({
   open,
@@ -36,21 +41,26 @@ export function CollectDialog({
 }) {
   const [langs, setLangs] = useState<("vi" | "en")[]>(["vi", "en"]);
   const [maxPages, setMaxPages] = useState(15);
-  const [preview, setPreview] = useState<CollectPreview | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
+  const qc = useQueryClient();
+  const [checked, setChecked] = useState<CollectPreview | null>(null);
+  // The plan the reviewer ticked; it counts only for that exact plan.
+  const [confirmedPlan, setConfirmedPlan] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const preview = checked && checked.revision === revision ? checked : null;
+  const outdated = checked !== null && preview === null;
+  const confirmed = preview !== null && confirmedPlan === preview.plan_sha256;
   const params: CollectParams = { languages: langs, claim_ids: [], max_queries: 8, max_results_per_query: 5, max_pages: maxPages };
 
   const reset = () => {
-    setPreview(null);
-    setConfirmed(false);
+    setChecked(null);
+    setConfirmedPlan(null);
     setError(null);
   };
   const check = useMutation({
     mutationFn: () => api.collectPreview(projectId, { ...params, expected_revision: revision }),
     onSuccess: (p) => {
-      setPreview(p);
-      setConfirmed(false);
+      setChecked(p);
+      setConfirmedPlan(null);
       setError(null);
     },
     onError: (e) => setError((e as Error).message),
@@ -71,8 +81,10 @@ export function CollectDialog({
     },
     onError: (e) => {
       if (e instanceof ApiError && e.code === "network_not_confirmed" && e.details?.preview) {
-        setPreview(e.details.preview as CollectPreview); // what changed: confirm again
-        setConfirmed(false);
+        setChecked(e.details.preview as CollectPreview); // what changed: confirm again
+        setConfirmedPlan(null);
+        // The research may have a newer revision: reload it so this preview can count.
+        void qc.invalidateQueries({ queryKey: qk.research(projectId) });
       }
       setError((e as Error).message);
     },
@@ -150,12 +162,18 @@ export function CollectDialog({
               <input
                 type="checkbox"
                 checked={confirmed}
-                onChange={(e) => setConfirmed(e.target.checked)}
+                onChange={(e) => setConfirmedPlan(e.target.checked ? preview.plan_sha256 : null)}
                 disabled={!preview.hosts.length}
               />
               I confirm that these hosts may be contacted for this search.
             </label>
           </section>
+        ) : null}
+        {outdated ? (
+          <p role="alert" className="text-sm text-warning">
+            The research changed since this check (a job, the CLI or another tab). The previous list of hosts no longer
+            applies: check again what would be contacted.
+          </p>
         ) : null}
         {error ? (
           <p role="alert" className="text-sm text-danger">
@@ -164,7 +182,7 @@ export function CollectDialog({
         ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => check.mutate()} disabled={!langs.length || check.isPending}>
-            {check.isPending ? "Checking…" : preview ? "Check again" : "Check what would be contacted"}
+            {check.isPending ? "Checking…" : checked ? "Check again" : "Check what would be contacted"}
           </Button>
           <Button onClick={() => run.mutate()} disabled={!preview || !confirmed || run.isPending}>
             <Globe aria-hidden /> {run.isPending ? "Starting…" : "Start search"}

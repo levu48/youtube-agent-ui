@@ -17,6 +17,19 @@ import { formatDateTime } from "@/lib/format";
 import { qk } from "@/lib/queries";
 import { JOB_STATUS } from "@/lib/status";
 
+/** What stopping a job means, in the words of its type (never "draft" for a research job). */
+const CANCEL_COPY: Record<string, { title: string; confirm: string; after: string }> = {
+  draft: { title: "Stop this draft generation?", confirm: "Stop generation", after: "you can start a new draft later" },
+  "research-plan": { title: "Stop preparing claims?", confirm: "Stop preparing claims", after: "you can prepare the claims again later" },
+  "research-collect": { title: "Stop this source search?", confirm: "Stop search", after: "you can search again later" },
+  "research-add-url": { title: "Stop adding this source?", confirm: "Stop adding", after: "you can add the URL again later" },
+};
+const CANCEL_FALLBACK = { title: "Stop this job?", confirm: "Stop job", after: "you can start it again later" };
+
+export function cancelCopy(type: string) {
+  return CANCEL_COPY[type] ?? CANCEL_FALLBACK;
+}
+
 export function JobActions({
   job,
   status,
@@ -41,6 +54,7 @@ export function JobActions({
     },
   });
   if (isTerminal(status)) return null;
+  const copy = cancelCopy(job.type);
   const cancelling = cancelRequested || cancel.isPending;
   return (
     <>
@@ -51,9 +65,9 @@ export function JobActions({
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
-        title="Stop this draft generation?"
-        description="The engine process will be interrupted. Files already published by the engine stay as they are, and you can start a new draft later."
-        confirmLabel="Stop generation"
+        title={copy.title}
+        description={`The engine process will be interrupted. Files already published by the engine stay as they are, and ${copy.after}.`}
+        confirmLabel={copy.confirm}
         destructive
         pending={cancel.isPending}
         onConfirm={() => cancel.mutate()}
@@ -62,11 +76,14 @@ export function JobActions({
   );
 }
 
-/** Refetch the job and invalidate every query derived from its project. */
+/** Refetch the job and invalidate every query derived from its project. The research view
+ * is named explicitly (not only through the project prefix): after a research job the page
+ * must show the engine's new report, sources, snapshots and revision without a reload. */
 export async function refreshAfterJob(qc: QueryClient, jobId: string) {
   const job = await qc.fetchQuery({ queryKey: qk.job(jobId), queryFn: () => api.job(jobId, 1), staleTime: 0 });
   await Promise.all([
     qc.invalidateQueries({ queryKey: qk.project(job.project_id) }),
+    qc.invalidateQueries({ queryKey: qk.research(job.project_id) }),
     qc.invalidateQueries({ queryKey: ["jobs"] }),
     qc.invalidateQueries({ queryKey: qk.projects }),
   ]);
@@ -114,10 +131,12 @@ export function JobCard({ jobId, title = "Draft job" }: { jobId: string; title?:
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <CardTitle className="text-lg">{title}</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            {job.provider === "fixture" ? "Offline fixture provider" : `Ollama · ${job.model ?? "default model"}`}
-            {job.from_stage ? ` · from ${job.from_stage}` : ""}
-          </p>
+          {job.type === "draft" ? (
+            <p className="text-sm text-muted-foreground">
+              {job.provider === "fixture" ? "Offline fixture provider" : `Ollama · ${job.model ?? "default model"}`}
+              {job.from_stage ? ` · from ${job.from_stage}` : ""}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <JobStatusBadge status={status} cancelling={cancelRequested} />
