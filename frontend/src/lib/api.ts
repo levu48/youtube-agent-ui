@@ -462,6 +462,218 @@ export interface ResearchView {
   stage: Stage | null;
   network: { enabled: boolean; search_provider: string };
   active_job_id: string | null;
+  // UI-B (engine D-119/D-120); absent from views built before them.
+  plan?: ResearchPlanView | null;
+  review?: ReviewFileView | null;
+  scenes?: SceneNarration[];
+  editing?: ResearchEditing;
+}
+
+export interface AnchorView {
+  scene_id: string;
+  start: number;
+  end: number;
+  excerpt: string;
+  /** Split by the backend at the engine's code-point offsets; null when it no longer matches. */
+  context: { before: string; excerpt: string; after: string; truncated_before: boolean; truncated_after: boolean } | null;
+}
+
+export interface PlanClaim {
+  id: string;
+  assertion: string;
+  kind: ClaimKind;
+  flags: ClaimFlag[];
+  contested: boolean;
+  notes: string;
+  origin: string;
+  search_queries: string[];
+  anchors: AnchorView[];
+}
+
+export interface ResearchPlanView {
+  claims: PlanClaim[];
+  leads: { section_id: string; text: string }[];
+  language: string | null;
+}
+
+export interface ReviewRecord {
+  claim_id: string;
+  status: ClaimStatus;
+  reviewer: string | null;
+  reviewed_at: string | null;
+  rationale: string | null;
+  counterargument_summary?: string | null;
+  counter_search_done?: boolean;
+  contradiction_resolution?: string | null;
+  narration_qualifies_dispute?: boolean;
+  exceptional_primary_basis?: string | null;
+  basis?: unknown;
+}
+
+export interface RecheckRecord {
+  id: string | null;
+  source_id: string;
+  cited_snapshot_id: string;
+  current_snapshot_id: string;
+  claim_ids: string[];
+  reviewer: string;
+  reviewed_at: string;
+  rationale: string;
+}
+
+export interface PrimaryAttestationRecord {
+  snapshot_id: string;
+  text_sha256: string;
+  provenance_sha256: string;
+  reviewer: string;
+  statement: string;
+  at: string;
+}
+
+export interface ReviewFileView {
+  present: boolean;
+  schema_version: string | null;
+  supported: boolean;
+  reviews: ReviewRecord[];
+  completeness: { reviewer: string; confirmed_at: string; statement: string; inventory_fingerprint: string | null } | null;
+  source_rechecks: RecheckRecord[];
+  primary_source_attestations: PrimaryAttestationRecord[];
+  history_summary: { count: number; last_seq: number | null };
+}
+
+export interface SceneNarration {
+  id: string;
+  section_id: string | null;
+  narration: string;
+}
+
+export interface ResearchEditing {
+  supported: boolean;
+  reason: string | null;
+  migration_required?: boolean;
+  legacy_ids?: boolean;
+}
+
+export interface EvidenceRecord {
+  id: string | null;
+  claim_id: string;
+  snapshot_id: string;
+  start: number;
+  end: number;
+  quote: string;
+  role: EvidenceRole;
+  explanation: string;
+  source_type: SourceType;
+  evidence_root: string | null;
+  original_language: string | null;
+  is_translation: boolean;
+  translation_of:
+    | { snapshot_id: string; start: number; end: number; quote: string; language: string; speaker: string; equivalence_note: string }
+    | string
+    | null;
+  translator: string | null;
+}
+
+export const CLAIM_KINDS = ["factual", "quotation", "quantitative", "interpretation", "editorial"] as const;
+export type ClaimKind = (typeof CLAIM_KINDS)[number];
+export const CLAIM_FLAGS = [
+  "date", "number", "quotation", "attribution", "causation", "contested", "source_needed", "uncertain", "question", "named_subject",
+] as const;
+export type ClaimFlag = (typeof CLAIM_FLAGS)[number];
+export const CLAIM_STATUSES = [
+  "unverified", "supported_pending_review", "verified", "disputed", "insufficient", "editorial_nonfactual",
+] as const;
+export type ClaimStatus = (typeof CLAIM_STATUSES)[number];
+export const EVIDENCE_ROLES = ["supports", "contradicts", "context", "mentions_only"] as const;
+export type EvidenceRole = (typeof EVIDENCE_ROLES)[number];
+export const SOURCE_TYPES = ["primary", "secondary", "encyclopedia", "opinion", "user_supplied", "unknown"] as const;
+export type SourceType = (typeof SOURCE_TYPES)[number];
+
+/** One research-edit operation (engine D-119/D-120); the backend validates it strictly. */
+export type EditOperation = { op: string } & Record<string, unknown>;
+
+export interface EditResult {
+  status: "published" | "already_current" | "would_publish";
+  dry_run: boolean;
+  previous_revision: string;
+  revision: string;
+  changed_files: string[];
+  created: { op_index: number; kind: "claim" | "link" | "recheck"; id: string }[];
+  occurrences: { op_index: number; field: "quote" | "original_quote" | "excerpt"; occurrences: Occurrence[] }[];
+  check: { approvable: boolean; blocking_items: number; items: ResearchItem[] };
+  approval_status: string;
+}
+
+export interface Occurrence {
+  n: number;
+  start: number;
+  end: number;
+  context: string;
+}
+
+export interface HistoryEntry {
+  id: string;
+  seq: number;
+  kind: string;
+  subject_id: string | null;
+  action: string;
+  at: string;
+  by_reviewer: string | null;
+  reason: string | null;
+  previous: Record<string, unknown>;
+  outdated_components: string[];
+}
+
+export interface HistoryPage {
+  entries: HistoryEntry[];
+  next_after_seq: number | null;
+  has_more: boolean;
+  chain_ok: boolean | null;
+  revision: string | null;
+}
+
+export interface DocumentImport {
+  title: string;
+  language: string;
+  citation: string;
+  imported_by: string;
+  edition?: string;
+  declared_url?: string;
+  original_published_at?: string;
+  license?: string;
+  note?: string;
+  new_version_of?: string;
+  text: string;
+}
+
+export interface LineageSegment {
+  segment_id: string;
+  section_id: string;
+  scene_id: string | null;
+  origin: "fixture" | "fixture_derived" | "llm" | "human";
+  /** The current sentence, when one matches the recorded SHA-256; otherwise null. */
+  text: string | null;
+  norm: string;
+  derived_from: string[];
+  attestation: { reviewer: string; statement: string; at: string } | null;
+  initialized_from: string | null;
+}
+
+export interface NarrationView {
+  revision: string | null;
+  report_error: { code: string; message: string } | null;
+  lineage: { present: boolean; supported?: boolean; fixture_project: boolean | null; segments: LineageSegment[] } | null;
+  lineage_error: { code: string; message: string } | null;
+  items: ResearchItem[];
+  needs_init: boolean;
+}
+
+export interface LineageResult {
+  status: string;
+  segments: string[];
+  remaining: number;
+  recovered: boolean | null;
+  revision: string | null;
 }
 
 export interface CollectParams {
@@ -619,6 +831,26 @@ export const api = {
     request<{ snapshot: ResearchSnapshot; text: string }>(
       `/projects/${encodeURIComponent(id)}/research/snapshots/${encodeURIComponent(snapshotId)}`,
     ),
+  researchEdit: (id: string, body: { expected_revision: string; operations: EditOperation[]; dry_run?: boolean }) =>
+    post<{ result: EditResult; research?: ResearchView }>(`/projects/${encodeURIComponent(id)}/research/edit`, body),
+  researchHistory: (id: string, params: { kind?: string; subject_id?: string; after_seq?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v));
+    return request<HistoryPage>(`/projects/${encodeURIComponent(id)}/research/history${q.size ? `?${q}` : ""}`);
+  },
+  addDocument: (id: string, body: DocumentImport & { expected_revision: string }) =>
+    post<{ result: { source_id: string; snapshot_id: string; supersedes_snapshot_id: string | null; chars: number }; research: ResearchView }>(
+      `/projects/${encodeURIComponent(id)}/research/documents`,
+      body,
+    ),
+  narration: (id: string) => request<NarrationView>(`/projects/${encodeURIComponent(id)}/draft/narration`),
+  narrationAttest: (id: string, body: { expected_revision: string; reviewer: string; statement: string; segment_ids: string[] }) =>
+    post<{ result: LineageResult; narration: NarrationView }>(`/projects/${encodeURIComponent(id)}/draft/narration/attest`, body),
+  provenanceInit: (id: string, expected_revision: string) =>
+    post<{ result: LineageResult; narration: NarrationView }>(`/projects/${encodeURIComponent(id)}/draft/narration/provenance-init`, {
+      expected_revision,
+      confirm: true,
+    }),
   researchPlan: (id: string, expected_revision: string) =>
     post<JobStarted>(`/projects/${encodeURIComponent(id)}/research/plan`, { expected_revision }),
   collectPreview: (id: string, body: CollectParams & { expected_revision: string }) =>

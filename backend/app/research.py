@@ -148,3 +148,218 @@ def snapshot_text(root: Path, snapshot_id: str) -> dict[str, Any]:
 
 def research_started(root: Path) -> bool:
     return (root / "research-plan.json").is_file()
+
+
+# --------------------------------------------------------------------------- UI-B reads
+
+PLAN = "research-plan.json"
+STORYBOARD = "storyboard.draft.json"
+SCRIPT = "script.json"
+LINEAGE = "render/llm/narration-provenance.json"
+REVIEW_SCHEMAS = ("m5-review-0.1", "m5-review-0.2")
+HISTORY_PAGE_MAX = 200
+CONTEXT_CHARS = 160
+_SENTENCE = re.compile(r"[^.!?…\n]+(?:[.!?…]+[\"'”’»)\]]*|$)", re.UNICODE)  # engine lineage.py
+
+
+def _nfc(text: str) -> str:
+    import unicodedata
+
+    return unicodedata.normalize("NFC", text)
+
+
+def scenes(root: Path) -> dict[str, dict[str, Any]]:
+    """Scene narrations from the draft storyboard (NFC, as the engine anchors them)."""
+    sb = _record(root, STORYBOARD) or {}
+    out: dict[str, dict[str, Any]] = {}
+    for sc in sb.get("scenes") or []:
+        if isinstance(sc, dict) and isinstance(sc.get("id"), str):
+            out[sc["id"]] = {
+                "id": sc["id"],
+                "section_id": sc.get("outline_section_id"),
+                "narration": _nfc(sc.get("narration") or ""),
+            }
+    return out
+
+
+def _anchor_view(anchor: dict[str, Any], narr: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """An anchor with its surrounding narration, split by the engine's code-point offsets
+    in Python (never in the browser), and only when the recorded excerpt still matches."""
+    out = {k: anchor.get(k) for k in ("scene_id", "start", "end", "excerpt")}
+    text = (narr.get(anchor.get("scene_id")) or {}).get("narration")
+    start, end = anchor.get("start"), anchor.get("end")
+    out["context"] = None
+    if (
+        isinstance(text, str)
+        and isinstance(start, int)
+        and isinstance(end, int)
+        and 0 <= start < end <= len(text)
+        and text[start:end] == anchor.get("excerpt")
+    ):
+        out["context"] = {
+            "before": text[max(0, start - CONTEXT_CHARS) : start],
+            "excerpt": text[start:end],
+            "after": text[end : end + CONTEXT_CHARS],
+            "truncated_before": start > CONTEXT_CHARS,
+            "truncated_after": end + CONTEXT_CHARS < len(text),
+        }
+    return out
+
+
+def plan(root: Path) -> dict[str, Any] | None:
+    """The claim inventory (``research-plan.json``, a human file written by the engine), with
+    the fields the report leaves out: anchors, notes, origin, search queries, and the leads."""
+    record = _record(root, PLAN)
+    if record is None:
+        return None
+    narr = scenes(root)
+    claims = []
+    for c in record.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
+        anchors = c.get("anchors") or []
+        claims.append({
+            "id": c.get("id"),
+            "assertion": c.get("assertion"),
+            "kind": c.get("kind"),
+            "flags": list(c.get("flags") or []),
+            "contested": bool(c.get("contested")),
+            "notes": c.get("notes") or "",
+            "origin": c.get("origin") or "rule",
+            "search_queries": list(c.get("search_queries") or []),
+            "anchors": [_anchor_view(a, narr) for a in anchors if isinstance(a, dict)],
+        })  # fmt: skip
+    leads = [
+        {"section_id": x.get("section_id"), "text": x.get("text")}
+        for x in record.get("leads") or []
+        if isinstance(x, dict)
+    ]
+    return {"claims": claims, "leads": leads, "language": record.get("language")}
+
+
+def review_file(root: Path) -> dict[str, Any]:
+    """Decisions, completeness, rechecks and primary attestations from
+    ``research-review.json`` (a human file the engine writes). Read only; the engine's
+    research-check decides what counts. History is summarised here and paged separately."""
+    record = _record(root, REVIEW)
+    if record is None:
+        return {
+            "present": False,
+            "schema_version": None,
+            "supported": True,
+            "reviews": [],
+            "completeness": None,
+            "source_rechecks": [],
+            "primary_source_attestations": [],
+            "history_summary": {"count": 0, "last_seq": None},
+        }
+    schema = record.get("schema_version")
+    comp = record.get("completeness")
+    history = [h for h in record.get("history") or [] if isinstance(h, dict)]
+    return {
+        "present": True,
+        "schema_version": schema,
+        "supported": schema in REVIEW_SCHEMAS,
+        "reviews": [r for r in record.get("reviews") or [] if isinstance(r, dict)],
+        "completeness": comp if isinstance(comp, dict) else None,
+        "source_rechecks": [r for r in record.get("source_rechecks") or [] if isinstance(r, dict)],
+        "primary_source_attestations": [
+            a for a in record.get("primary_source_attestations") or [] if isinstance(a, dict)
+        ],
+        "history_summary": {
+            "count": len(history),
+            "last_seq": history[-1].get("seq") if history else None,
+        },
+    }  # fmt: skip
+
+
+def history_page(
+    root: Path,
+    *,
+    kind: str | None = None,
+    subject_id: str | None = None,
+    after_seq: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """One page of the review history (engine D-119), ordered by ``seq``. Integrity is the
+    engine's to judge: the caller reports ``chain_ok`` from research-check's
+    ``history_tampered`` item at the same revision."""
+    record = _record(root, REVIEW)
+    if record is None:
+        return {"entries": [], "next_after_seq": None, "has_more": False}
+    if record.get("schema_version") != "m5-review-0.2":
+        raise ResearchReadError(
+            502,
+            "engine_unsupported",
+            "The review history needs research-review.json m5-review-0.2: upgrade the "
+            "research records first.",
+        )
+    entries = [h for h in record.get("history") or [] if isinstance(h, dict)]
+    picked = [
+        e
+        for e in entries
+        if isinstance(e.get("seq"), int)
+        and e["seq"] > after_seq
+        and (kind is None or e.get("kind") == kind)
+        and (subject_id is None or e.get("subject_id") == subject_id)
+    ]
+    limit = max(1, min(limit, HISTORY_PAGE_MAX))
+    page = picked[:limit]
+    return {
+        "entries": page,
+        "next_after_seq": page[-1]["seq"] if page else None,
+        "has_more": len(picked) > limit,
+    }
+
+
+def _sentences(narration: str) -> list[str]:
+    text = _nfc(narration)
+    return [m.group(0).strip() for m in _SENTENCE.finditer(text) if m.group(0).strip()]
+
+
+def lineage(root: Path) -> dict[str, Any]:
+    """The narration lineage (engine D-120, tool-owned ``narration-provenance.json``), read
+    only. A segment's text is shown only when a current script sentence has exactly the
+    recorded ``text_sha256``; otherwise only the engine's normalised form is available."""
+    record = _record(root, LINEAGE)
+    if record is None:
+        return {"present": False, "fixture_project": None, "segments": [], "history": []}
+    if record.get("schema_version") != "m3-narration-provenance-1":
+        return {
+            "present": True,
+            "supported": False,
+            "fixture_project": None,
+            "segments": [],
+            "history": [],
+        }
+    script = _record(root, SCRIPT) or {}
+    texts: dict[tuple[str, str], list[str]] = {}
+    for sec in script.get("sections") or []:
+        if isinstance(sec, dict):
+            for t in _sentences(sec.get("narration") or ""):
+                key = (sec.get("outline_section_id"), hashlib.sha256(t.encode("utf-8")).hexdigest())
+                texts.setdefault(key, []).append(t)
+    segments = []
+    for s in record.get("segments") or []:
+        if not isinstance(s, dict):
+            continue
+        found = texts.get((s.get("section_id"), s.get("text_sha256")))
+        segments.append({
+            "segment_id": s.get("segment_id"),
+            "section_id": s.get("section_id"),
+            "scene_id": s.get("scene_id"),
+            "origin": s.get("origin"),
+            "text": found[0] if found else None,
+            "norm": s.get("norm"),
+            "derived_from": list(s.get("derived_from") or []),
+            "attestation": s.get("attestation") if isinstance(s.get("attestation"), dict) else None,
+            "initialized_from": s.get("initialized_from"),
+        })  # fmt: skip
+    history = [h for h in record.get("history") or [] if isinstance(h, dict)][-50:]
+    return {
+        "present": True,
+        "supported": True,
+        "fixture_project": bool(record.get("fixture_project")),
+        "segments": segments,
+        "history": history,
+    }

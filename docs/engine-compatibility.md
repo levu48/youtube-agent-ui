@@ -204,6 +204,32 @@ These facts were checked against the CLI and by the real-engine integration test
 - **Reads.** `research.json` (sources), `render/research/snapshots.json` and `render/research/pages/<sha256>.txt`, and `evidence.json` are read only. Snapshot text is served only when its SHA-256 matches the record.
 - **CLI interoperability.** After UI jobs, the CLI's `research-check` reports the same revision as the UI.
 
+### Verified at `fb6bffc` (UI-B, 2026-11-22)
+
+These facts were checked against the CLI, the source and the real-engine integration test `test_research_review_with_real_engine`.
+
+- **`research-edit --project-root=P --expect-revision=R --json [--dry-run]`.** The patch `{"operations": [...]}` goes on stdin (≤1 MiB, ≤200 operations, strict: no nulls, no unknown fields).
+  - The result is `{"ok": true, status, dry_run, previous_revision, revision, changed_files, created[{op_index, kind, id}], occurrences[{op_index, field, occurrences[{n, start, end, context}]}], check, approval_status}`.
+  - A dry run lists every occurrence of a quote, an original quote or an excerpt, and an ambiguous quote is not an error. A real run needs `occurrence` when a quote occurs more than once (`ambiguous_quote`).
+- **Refusals** are `invalid_patch` (exit 2), with `details[{loc: "operations.i", msg, code}]`.
+  - `code` is the operation's own: `unknown_claim`, `unknown_link`, `unknown_snapshot`, `quote_not_found`, `ambiguous_quote`, `bad_occurrence`, `invalid_reviewer`, `claim_exists`, `duplicate_link`, `recheck_exists`, `not_imported`, `unknown_attestation`, …
+  - A broken history is `invalid_patch` with the code `history_tampered`.
+  - A `m5-review-0.1` file is `migration_required` for every operation except `migrate_review_file` and `migrate_ids`.
+- **`research-check` per claim** reports `status` (an outdated review counts as `unverified`), `review_outdated` (components such as `claim`, `evidence.changed:ev-…`, `basis_missing`) and `outdated_review {status, reviewer, reviewed_at}`.
+  - Link references carry `acquisition`, but no link ID, quote or explanation. The UI joins them with `evidence.json`.
+  - Items may carry `refs`: `components` for `review_outdated`, and `source_id`, `cited_snapshot_id` and `current_snapshot_id` for rechecks.
+- **Text minimums** (`substantive`):
+  - a rationale, a contradiction resolution, an exceptional primary basis, an equivalence note and a recheck rationale need 6 words and 30 characters;
+  - an explanation, a counterargument, a completeness statement and an attestation statement need 5 words and 25 characters.
+
+  They are applied by `research-check`, not at save time. `narration-attest` alone refuses a statement below 5/25 (`invalid_input`).
+- **`research-add-document`** (provenance as flags, text on stdin) prints `{"ok": true, source_id, snapshot_id, supersedes_snapshot_id, chars, revision}`. A duplicate is `document_exists`, with `details {source_id, snapshot_id}`.
+- **Narration lineage.** `render/llm/narration-provenance.json` (`m3-narration-provenance-1`) is written by every fixture `draft` and updated by `draft-edit`.
+  - Segments store `text_sha256` and a normalised form, not the sentence. The UI recovers the text by splitting the script narration with the engine's sentence pattern and matching SHA-256.
+  - `narration-attest` and `narration-provenance-init` print `{"ok": true, status, segments, remaining, recovered, revision}`.
+  - Refusals are `lineage_refused` with `details.reason` (`unchanged_fixture_text`, `still_close`, `not_fixture_derived`, `unknown_segment`, `already_initialized`, `not_fixture_project`, `narration_provenance_invalid`).
+- **History.** The engine chains entries by `sha256` of its own model dump (`ensure_ascii` JSON). The UI does not re-implement this: `chain_ok` is the absence of the engine's `history_tampered` item.
+
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
 **Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.
