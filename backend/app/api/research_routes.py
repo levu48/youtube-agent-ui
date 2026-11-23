@@ -10,6 +10,7 @@ documented artifacts only, and the engine's ``research-check`` decides what coun
 from __future__ import annotations
 
 import json
+import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -26,7 +27,10 @@ from app.research_schemas import (
     DocumentImportRequest,
     NarrationAttestRequest,
     ProvenanceInitRequest,
+    ResearchApplyRequest,
+    ResearchApproveRequest,
     ResearchEditRequest,
+    ResearchExportRequest,
 )
 from app.state import AppState, get_state
 
@@ -108,6 +112,16 @@ def _editing(report: dict | None, records: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_GATE_RE = re.compile(r"^(G1 editorial|G2 research): ([a-z_]{1,40})$")
+
+
+def _gate(detail: str | None, name: str) -> str | None:
+    """The gate state production-status reports in a stage's detail (``G2 research:
+    approved_not_applied``); None when the engine reports none. Never inferred."""
+    m = _GATE_RE.fullmatch((detail or "").strip())
+    return m.group(2) if m and m.group(1) == name else None
+
+
 async def research_view(s: AppState, row: ProjectRow, root) -> dict:
     """The research workspace: the engine's report (with its revision), plus read-only
     claim, source, snapshot, evidence and review records."""
@@ -115,6 +129,7 @@ async def research_view(s: AppState, row: ProjectRow, root) -> dict:
     records = _records(root)
     status = await s.engine.cached_status(row.id, root)
     stage = next((st.model_dump() for st in status.stages if st.stage == "research"), None)
+    draft = next((st for st in status.stages if st.stage == "draft"), None)
     active = s.jobs.active_for(row.id)
     return {
         "report": report,
@@ -124,6 +139,10 @@ async def research_view(s: AppState, row: ProjectRow, root) -> dict:
         **records,
         "editing": _editing(report, records),
         "stage": stage,
+        "gates": {
+            "g1": _gate(draft.detail if draft else None, "G1 editorial"),
+            "g2": _gate(stage["detail"] if stage else None, "G2 research"),
+        },
         "network": {
             "enabled": s.settings.research_network,
             "search_provider": _search_provider(s),
@@ -219,16 +238,34 @@ def _write_failure(res, what: str) -> ApiError:
             status, "lineage_refused", first or "The engine refused.", {"reason": reason}
         )
     if code == "human_edit_conflict":
+        paths = sorted(set(_EXPORT_PATH_RE.findall(first)))[:10]
         return ApiError(
             409,
             "human_edit_conflict",
-            "The engine refused to overwrite hand edits. Resolve them in the CLI first.",
+            "The engine refused to overwrite hand edits"
+            + (f" ({', '.join(paths)})" if paths else "")
+            + ". The UI never overwrites them: keep or restore them in the CLI first.",
+            {"paths": paths},
         )
+    if code == "not_approvable":
+        lines = redact(str(jerr.get("message") or "")).splitlines()
+        items = [
+            {"code": m.group(1), "detail": m.group(2)[:500]}
+            for line in lines
+            if (m := _ITEM_LINE_RE.match(line))
+        ][:25]
+        return ApiError(422, "not_approvable", first or f"The engine refused to {what}.", {
+            "items": items,
+        })  # fmt: skip
     if code == "invalid_input":
         return ApiError(422, "invalid_edit", f"The engine refused to {what}: {first}", {
             "errors": [{"loc": "", "msg": first, "code": "invalid_input"}],
         })  # fmt: skip
     return _research_failure(res, what)
+
+
+_EXPORT_PATH_RE = re.compile(r"\b((?:output|render/research)/[A-Za-z0-9._-]{1,80})")
+_ITEM_LINE_RE = re.compile(r"^\s+- \[([a-z_]{1,60})\] (.+)$")
 
 
 def _ok_json(res) -> dict:
@@ -423,4 +460,84 @@ def _lineage_result(data: dict) -> dict:
         "remaining": data.get("remaining"),
         "recovered": data.get("recovered"),
         "revision": _revision_or_none(data.get("revision")),
+    }
+
+
+# ---------------------------------------------------------------------- G2, apply, export
+
+
+@router.post("/projects/{project_id}/research/approve")
+async def research_approve(project_id: str, body: ResearchApproveRequest, s: State) -> dict:
+    """G2 through ``ytagent research-approve --expect-revision``: the engine records the
+    approval only if the research is still at the revision the reviewer validated, is
+    approvable, and G1 is current. A refusal records nothing."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    data = await _engine_write(
+        s,
+        row,
+        "approve the research",
+        lambda: s.engine.research_approve(
+            root,
+            expect_revision=body.expected_revision,
+            reviewer=body.reviewer,
+            comment=body.comment,
+        ),
+    )
+    approval = data.get("approval") if isinstance(data.get("approval"), dict) else {}
+    return {
+        "result": {
+            "status": data.get("status"),
+            "revision": _revision_or_none(data.get("revision")),
+            "approval": {
+                k: approval.get(k)
+                for k in ("reviewer", "approved_at", "comment", "policy_version", "meaning")
+            },
+        },
+        "research": await research_view(s, row, root),
+    }
+
+
+@router.post("/projects/{project_id}/research/apply")
+async def research_apply(project_id: str, body: ResearchApplyRequest, s: State) -> dict:
+    """Write the approved claim IDs to the scenes (``research-apply``). Only ``claim_ids``
+    change, which makes G1 out of date until ``draft-approve`` runs again."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    data = await _engine_write(
+        s,
+        row,
+        "apply claim IDs to the scenes",
+        lambda: s.engine.research_apply(root, expect_revision=body.expected_revision),
+    )
+    return {
+        "result": {
+            "status": data.get("status"),
+            "scenes_changed": [str(x) for x in data.get("scenes_changed") or []][:500],
+            "written": [str(x) for x in data.get("written") or []][:20],
+            "revision": _revision_or_none(data.get("revision")),
+        },
+        "research": await research_view(s, row, root),
+    }
+
+
+@router.post("/projects/{project_id}/research/export")
+async def research_export(project_id: str, body: ResearchExportRequest, s: State) -> dict:
+    """``research-export``: sources.md, the citation plan and the report, as relative paths.
+    Never overwrites hand edits (no ``--replace-output``)."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    data = await _engine_write(
+        s,
+        row,
+        "export the research",
+        lambda: s.engine.research_export(root, expect_revision=body.expected_revision),
+    )
+    return {
+        "result": {
+            "written": [str(x) for x in data.get("written") or []][:20],
+            "unchanged": [str(x) for x in data.get("unchanged") or []][:20],
+            "revision": _revision_or_none(data.get("revision")),
+        },
+        "research": await research_view(s, row, root),
     }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -621,3 +622,179 @@ def test_research_review_with_real_engine(settings):
         root = settings.projects_root_real / "hcm-demo"
         cli = _cli("research-check", f"--project-root={root}", "--json")
         assert json.loads(cli.stdout)["revision"] == c.get(f"{api}/research").json()["revision"]
+
+
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "research"  # see SOURCE.md there
+# Shared with the E2E test: human-written narration whose every claim a document supports.
+G2 = json.loads((FIXTURES / "g2-journey.json").read_text("utf-8"))
+
+
+def g2_operations(claims: list[dict], snapshots: dict[str, str]) -> tuple[list, list]:
+    """The journey's research edits for these claims: (evidence and primary attestations,
+    decisions and completeness). Claims are matched by the start of their assertion."""
+
+    def ids(prefix: str) -> list[str]:
+        return [x["id"] for x in claims if x["assertion"].startswith(prefix)]
+
+    vi, en = snapshots["vi"], snapshots["en"]
+    q = G2["quotation"]
+    evidence = [
+        {"op": "evidence.add", "claim_id": cid, "snapshot_id": vi, "quote": e["quote"],
+         "role": "supports", "explanation": e["explanation"], "source_type": "primary"}
+        for e in G2["evidence"]
+        for cid in ids(e["claim_prefix"])
+    ]  # fmt: skip
+    trace = {"snapshot_id": en, "quote": q["original_quote"], "language": "en",
+             "speaker": q["speaker"], "equivalence_note": q["equivalence_note"]}  # fmt: skip
+    for cid in (c for p in q["claim_prefixes"] for c in ids(p)):
+        evidence += [
+            {"op": "evidence.add", "claim_id": cid, "snapshot_id": en, "quote": q["original"],
+             "role": "supports", "source_type": "primary",
+             "explanation": q["original_explanation"]},
+            {"op": "evidence.add", "claim_id": cid, "snapshot_id": vi, "quote": q["translated"],
+             "role": "supports", "source_type": "primary", "is_translation": True,
+             "translation_of": trace, "original_language": "en",
+             "explanation": q["translated_explanation"]},
+        ]  # fmt: skip
+    evidence += [
+        {"op": "documents.attest_primary", "snapshot_id": snapshots[k], "reviewer": G2["reviewer"],
+         "statement": d["primary_statement"]}
+        for k, d in G2["documents"].items()
+    ]  # fmt: skip
+    decisions = [
+        {"op": "reviews.set", "claim_id": x["id"], "status": "verified", "reviewer": G2["reviewer"],
+         "rationale": G2["rationale"]}
+        for x in claims
+    ]  # fmt: skip
+    decisions.append(
+        {"op": "completeness.set", "reviewer": G2["reviewer"], "statement": G2["completeness"]}
+    )
+    return evidence, decisions
+
+
+def test_g2_success_with_a_genuinely_sourced_document(settings):
+    """M3 UI-C, the required G2 success (offline, no fixture evidence): a fixture draft whose
+    narration is rewritten and attested, G1, the claim inventory, two public-domain documents
+    (tests/fixtures/research/SOURCE.md) with primary attestations, evidence including a
+    translated quotation traced to its original, decisions, completeness, then G2, apply, G1
+    again and export, all through the UI's API. The CLI then reports G2 approved and applied."""
+    project = G2["project"]
+    api = f"/api/v1/projects/{project['slug']}"
+    texts = {k: (FIXTURES / d["file"]).read_text("utf-8") for k, d in G2["documents"].items()}
+    for e in G2["evidence"]:
+        assert texts["vi"].count(e["quote"]) == 1, e["quote"]
+    assert texts["vi"].count(G2["quotation"]["translated"]) == 1
+    assert texts["en"].count(G2["quotation"]["original"]) == 1
+    with Client(create_app(settings)) as c:
+
+        def ok(resp) -> dict:
+            assert resp.status_code == 200, resp.text
+            return resp.json()
+
+        def rev() -> str:
+            return c.get(f"{api}/research").json()["revision"]
+
+        def g1() -> None:
+            token = c.get(f"{api}/draft").json()["review_token"]
+            body = {"reviewer": G2["approver"], "confirm": True, "review_token": token}
+            ok(c.post(f"{api}/draft/approve", json=body))
+
+        def edit(ops) -> dict:
+            body = {"expected_revision": rev(), "operations": ops}
+            return ok(c.post(f"{api}/research/edit", json=body))
+
+        assert c.post("/api/v1/projects", json=project).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+
+        # Rewrite every scene's narration in our own words, then attest the rewrites.
+        d = c.get(f"{api}/draft/editable").json()
+        sections = [s["outline_section_id"] for s in d["script"]["data"]["sections"]]
+        assert sections == list(G2["narration"]), sections
+        script = {"sections": [{"outline_section_id": k, "narration": v}
+                               for k, v in G2["narration"].items()]}  # fmt: skip
+        body = {"expected_revision": d["editing"]["revision"], "script": script}
+        ok(c.post(f"{api}/draft/edit", json=body))
+        nar = c.get(f"{api}/draft/narration").json()
+        segs = [s["segment_id"] for s in nar["lineage"]["segments"]]
+        assert {s["origin"] for s in nar["lineage"]["segments"]} == {"fixture_derived"}
+        body = {"expected_revision": nar["revision"], "reviewer": G2["reviewer"],
+                "statement": G2["attestation"], "segment_ids": segs}  # fmt: skip
+        out = ok(c.post(f"{api}/draft/narration/attest", json=body))
+        assert out["result"]["remaining"] == 0, out["result"]
+
+        # G1, then the claim inventory.
+        g1()
+        jid = c.post(f"{api}/research/plan", json={"expected_revision": rev()}).json()["job_id"]
+        wait_for(lambda: c.get(f"/api/v1/jobs/{jid}").json()["status"] == "succeeded", timeout=90)
+
+        # The two documents, imported offline with their provenance.
+        snapshots = {}
+        for k, meta in G2["documents"].items():
+            fields = {f: v for f, v in meta.items() if f not in ("file", "primary_statement")}
+            body = {"expected_revision": rev(), "imported_by": G2["reviewer"], "text": texts[k],
+                    **fields}  # fmt: skip
+            out = ok(c.post(f"{api}/research/documents", json=body))
+            snapshots[k] = out["result"]["snapshot_id"]
+
+        claims = c.get(f"{api}/research").json()["report"]["claims"]
+        assert len(claims) == 8, [x["assertion"] for x in claims]
+        evidence, decisions = g2_operations(claims, snapshots)
+        view = edit(evidence)["research"]
+        before_decisions = view["revision"]
+        traced = [x for x in view["evidence"] if x.get("is_translation")]
+        assert len(traced) == 2
+        assert all(x["translation_of"]["snapshot_id"] == snapshots["en"] for x in traced)
+        view = edit(decisions)["research"]
+        report = view["report"]
+        assert report["approvable"] is True, report["items"]
+        assert not [i for i in report["items"] if i["blocking"]]
+        assert view["gates"] == {"g1": "approved", "g2": "needs_review"}
+
+        # G2 with the revision the reviewer validated, apply, G1 again, export. An earlier
+        # revision is refused and records nothing.
+        body = {"expected_revision": before_decisions, "reviewer": G2["approver"], "confirm": True}
+        stale = c.post(f"{api}/research/approve", json=body)
+        assert stale.status_code == 409, stale.text
+        assert stale.json()["error"]["code"] == "revision_conflict"
+        assert c.get(f"{api}/research").json()["report"]["approval_status"] == "not_approved"
+        body = {**body, "expected_revision": view["revision"],
+                "comment": "Đã đối chiếu từng câu với văn bản."}  # fmt: skip
+        out = ok(c.post(f"{api}/research/approve", json=body))
+        assert out["result"]["status"] == "approved"
+        assert out["research"]["gates"]["g2"] == "approved_not_applied"
+        body = {"expected_revision": out["research"]["revision"], "confirm": True}
+        out = ok(c.post(f"{api}/research/apply", json=body))
+        assert out["result"]["status"] == "published"
+        assert out["result"]["scenes_changed"] == [f"scene-00{n}" for n in range(1, 5)]
+        assert out["research"]["gates"] == {"g1": "stale_after_apply", "g2": "approved"}
+        g1()
+        out = ok(c.post(f"{api}/research/export", json={"expected_revision": rev()}))
+        assert sorted(out["result"]["written"]) == [
+            "output/sources.md",
+            "render/research/citation-plan.json",
+            "render/research/research-report.json",
+            "render/research/research-report.md",
+        ]
+        assert out["research"]["gates"] == {"g1": "approved", "g2": "approved"}
+
+        # The CLI reports the same: G2 approved and applied, G1 approved.
+        root = settings.projects_root_real / project["slug"]
+        check = json.loads(_cli("research-check", f"--project-root={root}", "--json").stdout)
+        assert check["approval_status"] == "approved" and check["applied"] is True
+        assert check["revision"] == rev()
+        status = json.loads(_cli("production-status", f"--project-root={root}", "--json").stdout)
+        details = {s["stage"]: s["detail"] for s in status["stages"]}
+        assert details["draft"] == "G1 editorial: approved"
+        assert details["research"] == "G2 research: approved"
+        sources = (root / "output/sources.md").read_text("utf-8")
+        assert f"Research approval: approved, by {G2['approver']}" in sources
+
+        # A hand-edited export is never overwritten from the UI.
+        (root / "output/sources.md").write_text(sources + "\nGhi chú tay.\n", "utf-8")
+        r = c.post(f"{api}/research/export", json={"expected_revision": rev()})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "human_edit_conflict", r.text
+        assert r.json()["error"]["details"]["paths"] == ["output/sources.md"]
+        assert (root / "output/sources.md").read_text("utf-8").endswith("Ghi chú tay.\n")

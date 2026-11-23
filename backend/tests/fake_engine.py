@@ -334,7 +334,11 @@ def main() -> int:
             return 0
         drafted = (root / "script.json").exists()
         name = "production-status-drafted.json" if drafted else "production-status-created.json"
-        print((FIXTURES / name).read_text(encoding="utf-8"))
+        status = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+        import fake_research_g2  # G1/G2 once research has started
+
+        status["stages"] = fake_research_g2.production_stages(root, status["stages"])
+        print(json.dumps(status, ensure_ascii=False))
         return 0
     if cmd == "draft-check":
         if mode == "bad_json":

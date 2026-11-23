@@ -29,6 +29,9 @@ CAPABILITIES = [
     "research-add-document",
     "narration-attest",
     "narration-provenance-init",
+    "research-approve",
+    "research-apply",
+    "research-export",
 ]
 MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit/research-edit patch
 MAX_DOCUMENT_BYTES = 400_000 * 4  # the engine reads at most 400k characters of UTF-8
@@ -188,6 +191,22 @@ class EngineService:
         args = commands.narration_provenance_init_args(root, expect_revision=expect_revision)
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout * 2)
+
+    async def research_approve(self, root: Path, **kw: Any) -> EngineResult:
+        async with self._sem:
+            return await self.cli.run(
+                commands.research_approve_args(root, **kw), timeout=self.read_timeout
+            )
+
+    async def research_apply(self, root: Path, *, expect_revision: str) -> EngineResult:
+        args = commands.research_apply_args(root, expect_revision=expect_revision)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout)
+
+    async def research_export(self, root: Path, *, expect_revision: str) -> EngineResult:
+        args = commands.research_export_args(root, expect_revision=expect_revision)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout)
 
 
 class EngineReadError(RuntimeError):

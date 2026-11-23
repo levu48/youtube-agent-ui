@@ -48,6 +48,9 @@ class EngineOp(StrEnum):
     RESEARCH_ADD_DOCUMENT = "research-add-document"
     NARRATION_ATTEST = "narration-attest"
     NARRATION_PROVENANCE_INIT = "narration-provenance-init"
+    RESEARCH_APPROVE = "research-approve"
+    RESEARCH_APPLY = "research-apply"
+    RESEARCH_EXPORT = "research-export"
 
 
 class ArgumentError(ValueError):
@@ -415,6 +418,33 @@ def narration_provenance_init_args(root: Path, *, expect_revision: str) -> list[
         _revision(expect_revision),
         "--json",
     ]
+
+
+def research_approve_args(
+    root: Path, *, expect_revision: str, reviewer: str, comment: str | None = None
+) -> list[str]:
+    """G2: a named reviewer's attestation of the exact research state they validated
+    (``expect_revision``). The engine refuses unless that state is current and approvable,
+    and G1 is current; ``real_person`` on the reviewer is the engine's to judge."""
+    who = clean_text("reviewer", reviewer, required=True) or ""
+    if any(ch in who for ch in "\r\n\t"):
+        raise ArgumentError("reviewer must be a single line")
+    argv = [EngineOp.RESEARCH_APPROVE.value, _root(root), f"--reviewer={who}"]
+    note = clean_text("comment", comment)
+    if note is not None:
+        argv.append(f"--comment={note}")
+    return [*argv, _revision(expect_revision), "--json"]
+
+
+def research_apply_args(root: Path, *, expect_revision: str) -> list[str]:
+    """Write the approved claim IDs to the draft's scenes (only ``claim_ids`` change)."""
+    return [EngineOp.RESEARCH_APPLY.value, _root(root), _revision(expect_revision), "--json"]
+
+
+def research_export_args(root: Path, *, expect_revision: str) -> list[str]:
+    """Write sources.md, the citation plan and the report. Never ``--replace-output``: a
+    hand-edited export is refused by the engine and left for the CLI."""
+    return [EngineOp.RESEARCH_EXPORT.value, _root(root), _revision(expect_revision), "--json"]
 
 
 ALLOWED_SUBCOMMANDS = frozenset(op.value for op in EngineOp if op is not EngineOp.VERSION)

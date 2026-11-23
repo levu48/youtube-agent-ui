@@ -1,0 +1,87 @@
+{
+  "_comment": "The G2 journey shared by the real-engine integration test and the E2E test. Human-written narration; every claim is supported by a passage of the documents in this folder (see SOURCE.md).",
+  "project": {
+    "slug": "tuyen-ngon-1945",
+    "idea": "Tuyên ngôn Độc lập của Việt Nam năm 1945",
+    "language": "vi",
+    "duration_seconds": 90
+  },
+  "narration": {
+    "sec-01": "Bản Tuyên ngôn Độc lập của nước Việt Nam Dân chủ Cộng hòa mở đầu bằng một câu trong Tuyên ngôn Độc lập năm 1776 của nước Mỹ. Văn kiện dịch câu ấy là «Tất cả mọi người đều sinh ra bình đẳng».",
+    "sec-02": "Văn kiện kể rằng mùa thu năm 1940, phát xít Nhật vào Đông Dương và thực dân Pháp đầu hàng, mở cửa cho Nhật. Văn kiện cũng nêu rằng hơn 2 triệu đồng bào từ Quảng Trị đến Bắc Kỳ đã chết đói.",
+    "sec-03": "Theo văn kiện, ngày 9 tháng 3, Nhật tước khí giới của quân đội Pháp. Sau đó, Pháp chạy, Nhật hàng và vua Bảo Đại thoái vị.",
+    "sec-04": "Cuối cùng, Chính phủ lâm thời tuyên bố với thế giới rằng nước Việt Nam có quyền hưởng tự do và độc lập."
+  },
+  "reviewer": "Trần Thị B",
+  "approver": "Nguyễn Văn A",
+  "attestation": "Tôi đã tự viết lại toàn bộ lời dẫn dựa trên văn bản Tuyên ngôn.",
+  "documents": {
+    "vi": {
+      "file": "tuyen-ngon-doc-lap-1945.vi.txt",
+      "title": "Tuyên ngôn Độc lập nước Việt Nam Dân chủ Cộng hòa",
+      "language": "vi",
+      "citation": "Báo Cứu Quốc, số 36, ngày 5 tháng 9 năm 1945, tr. 1–2; bản chép trên Wikisource tiếng Việt, “Tuyên ngôn Độc lập Việt Nam”, phiên bản 85294",
+      "declared_url": "https://vi.wikisource.org/w/index.php?oldid=85294",
+      "original_published_at": "1945-09-05",
+      "license": "Phạm vi công cộng (PVCC-CPVN, PVCC-VN)",
+      "primary_statement": "Bản chép trên Wikisource của trang báo Cứu Quốc số 36, nơi văn kiện được đăng ngày 5 tháng 9 năm 1945."
+    },
+    "en": {
+      "file": "us-declaration-1776-preamble.en.txt",
+      "title": "United States Declaration of Independence (engrossed copy), opening",
+      "language": "en",
+      "citation": "United States Declaration of Independence, engrossed copy (1776); English Wikisource transcription, revision 16143344",
+      "declared_url": "https://en.wikisource.org/w/index.php?oldid=16143344",
+      "original_published_at": "1776-07-04",
+      "license": "Public domain (PD-old)",
+      "primary_statement": "Bản chép trên Wikisource của bản Tuyên ngôn viết tay trên giấy da năm 1776 lưu ở Lưu trữ Quốc gia Hoa Kỳ."
+    }
+  },
+  "evidence": [
+    {
+      "claim_prefix": "Bản Tuyên ngôn Độc lập của",
+      "quote": "Lời bất-hủ ấy ở trong bản Tuyên-ngôn Độc-lập năm 1776 của nước Mỹ.",
+      "explanation": "Văn kiện tự nêu rằng câu mở đầu nằm trong Tuyên ngôn năm 1776 của Mỹ."
+    },
+    {
+      "claim_prefix": "Văn kiện kể rằng mùa thu",
+      "quote": "Mùa thu năm 1940, phát-xít Nhật đến xâm-lăng Đông-Dương để mở thêm căn-cứ đánh Đồng-Minh, thì bọn thực-dân Pháp quỳ gối đầu hàng, mở cửa nước ta rước Nhật.",
+      "explanation": "Đoạn văn kể đúng sự việc mùa thu năm 1940 mà lời dẫn thuật lại."
+    },
+    {
+      "claim_prefix": "Văn kiện cũng nêu rằng hơn",
+      "quote": "Kết quả là cuối năm ngoái sang đầu năm nay, từ Quảng-trị đến Bắc-kỳ, hơn 2 triệu đồng bào ta bị chết đói.",
+      "explanation": "Đoạn văn nêu con số hơn 2 triệu người chết đói từ Quảng Trị đến Bắc Kỳ."
+    },
+    {
+      "claim_prefix": "Theo văn kiện, ngày 9 tháng",
+      "quote": "Ngày 9 tháng 3 năm nay Nhật tước khí-giới của quân đội Pháp.",
+      "explanation": "Đoạn văn ghi ngày 9 tháng 3 Nhật tước khí giới quân đội Pháp."
+    },
+    {
+      "claim_prefix": "Sau đó, Pháp chạy, Nhật hàn",
+      "quote": "Pháp chạy, Nhật hàng, vua Bảo-Đại thoái vị.",
+      "explanation": "Đoạn văn liệt kê đúng ba sự việc mà lời dẫn thuật lại."
+    },
+    {
+      "claim_prefix": "Cuối cùng, Chính phủ lâm th",
+      "quote": "Nước Việt-Nam có quyền hưởng tự-do và độc-lập, và sự thực đã thành một nước tự-do và độc-lập.",
+      "explanation": "Đây là lời tuyên bố của Chính phủ lâm thời ở cuối văn kiện."
+    }
+  ],
+  "quotation": {
+    "claim_prefixes": [
+      "Văn kiện dịch câu ấy là",
+      "Quoted words as stated"
+    ],
+    "translated": "Tất cả mọi người đều sinh ra bình đẳng.",
+    "translated_explanation": "Văn kiện năm 1945 dùng đúng câu dịch mà lời dẫn trích lại.",
+    "original": "We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights, that among these are Life, Liberty and the pursuit of Happiness.",
+    "original_explanation": "Đây là câu gốc tiếng Anh trong Tuyên ngôn năm 1776 mà văn kiện trích.",
+    "original_quote": "all men are created equal",
+    "speaker": "Thomas Jefferson",
+    "equivalence_note": "Bản năm 1945 dịch cụm “all men are created equal” thành “Tất cả mọi người đều sinh ra bình đẳng”; “created” được diễn đạt là “sinh ra”, nghĩa vẫn tương đương."
+  },
+  "rationale": "Tôi đã đọc đoạn văn được liên kết và nó nêu đúng điều câu này khẳng định về văn kiện.",
+  "completeness": "Mỗi câu có nội dung sự kiện trong lời dẫn đều đã có claim tương ứng."
+}

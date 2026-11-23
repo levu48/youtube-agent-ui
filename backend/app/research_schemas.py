@@ -323,3 +323,25 @@ class NarrationAttestRequest(_Strict):
 class ProvenanceInitRequest(_Strict):
     expected_revision: str = Field(pattern=HEX64)
     confirm: Literal[True]
+
+
+# --------------------------------------------------------------------------- G2, apply, export
+
+
+class ResearchApproveRequest(_Strict):
+    """G2. ``expected_revision`` is the revision the reviewer last validated; the engine
+    refuses the approval if anything changed since."""
+
+    expected_revision: str = Field(pattern=HEX64)
+    reviewer: Short
+    comment: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    confirm: Literal[True]
+
+
+class ResearchApplyRequest(_Strict):
+    expected_revision: str = Field(pattern=HEX64)
+    confirm: Literal[True]
+
+
+class ResearchExportRequest(_Strict):
+    expected_revision: str = Field(pattern=HEX64)
