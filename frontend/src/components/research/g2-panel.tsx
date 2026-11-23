@@ -3,7 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileOutput, ListChecks, ShieldCheck, Workflow } from "lucide-react";
 import Link from "next/link";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -21,7 +21,9 @@ const MEANING =
   "A named reviewer's audit attestation that the recorded evidence was reviewed for these exact claims and narration. It is not a " +
   "guarantee of historical truth, not a cryptographic signature, and not permission to publish.";
 
-type Validated = { revision: string; at: Date; approvable: boolean };
+/** One validation: the engine's check at `revision`. `spent` once the loaded research changed
+ * afterwards, even if it later returns to the same revision: then it never counts again. */
+type Validated = { projectId: string; revision: string; at: Date; approvable: boolean; spent: boolean };
 
 /**
  * Gate G2 and what follows it, each step one explicit engine command (engine D-85/D-118):
@@ -35,9 +37,25 @@ export function G2Panel({ projectId, view, disabled }: { projectId: string; view
   const report = view.report;
   const [validated, setValidated] = useState<Validated | null>(null);
   const [validating, setValidating] = useState(false);
-  const [approveOpen, setApproveOpen] = useState(false);
+  const attempt = useRef(0); // only the latest validation attempt may record its result
+  // The revision the approval dialog was opened for; it never changes while the dialog is open.
+  const [approveFor, setApproveFor] = useState<string | null>(null);
   const [applyOpen, setApplyOpen] = useState(false);
-  const [exported, setExported] = useState<ResearchExportResult | null>(null);
+  // The latest export attempt's result, for the revision it ran at; cleared when a new one starts.
+  const [exported, setExported] = useState<{ revision: string | null; result: ResearchExportResult } | null>(null);
+
+  // Every update of this project's research in the cache (a refresh, an edit, a job's result)
+  // spends a validation made for another revision. Subscribing sees each update, even ones
+  // that land in the same render.
+  useEffect(() => {
+    const key = JSON.stringify(qk.research(projectId));
+    return qc.getQueryCache().subscribe((e) => {
+      if (e.type !== "updated" || e.action.type !== "success" || JSON.stringify(e.query.queryKey) !== key) return;
+      const revision = (e.query.state.data as ResearchView | undefined)?.revision ?? null;
+      setValidated((v) => (v && !v.spent && v.revision !== revision ? { ...v, spent: true } : v));
+    });
+  }, [qc, projectId]);
+  const loaded = qc.getQueryData<ResearchView>(qk.research(projectId))?.revision ?? view.revision ?? "";
 
   const done = (r: { research: ResearchView }) => {
     qc.setQueryData(qk.research(projectId), r.research);
@@ -56,30 +74,48 @@ export function G2Panel({ projectId, view, disabled }: { projectId: string; view
   });
   const exp = useMutation({
     mutationFn: () => api.researchExport(projectId, view.revision!),
+    onMutate: () => setExported(null), // a failed attempt never shows an earlier success
     onSuccess: (r) => {
       done(r);
-      setExported(r.result);
+      setExported({ revision: r.research.revision, result: r.result });
       toast.success(r.result.written.length ? "Research records exported" : "Research records already up to date");
     },
   });
 
   if (!report) return null;
   const status = report.approval_status;
-  const current = validated && validated.revision === view.revision ? validated : null;
+  const current = validated && !validated.spent && validated.projectId === projectId && validated.revision === loaded ? validated : null;
+  const exportShown = exported && exported.revision === loaded ? exported.result : null;
   const g1 = view.gates?.g1 ?? null;
   const g2 = view.gates?.g2 ?? null;
 
+  /** Runs the engine's check now. The result counts only if it is still the latest attempt
+   * and nothing else changed the loaded research while it ran (an edit, a job, a refresh);
+   * otherwise the reviewer is asked to validate again. */
   const validate = async () => {
+    const n = ++attempt.current;
+    const key = qk.research(projectId);
+    const before = qc.getQueryData<ResearchView>(key)?.revision ?? null;
     setValidating(true);
     try {
-      const fresh = await qc.fetchQuery({ queryKey: qk.research(projectId), queryFn: () => api.research(projectId), staleTime: 0 });
-      if (fresh.revision && fresh.report) setValidated({ revision: fresh.revision, at: new Date(), approvable: fresh.report.approvable });
-      else setValidated(null);
+      const fresh = await api.research(projectId);
+      if (n !== attempt.current) return;
+      const record = (revision: string, approvable: boolean, spent: boolean) =>
+        setValidated({ projectId, revision, at: new Date(), approvable, spent });
+      if (!fresh.revision || !fresh.report) {
+        setValidated(null);
+      } else if ((qc.getQueryData<ResearchView>(key)?.revision ?? null) !== before) {
+        record(fresh.revision, false, true); // the research changed while the check ran
+      } else {
+        qc.setQueryData(key, fresh);
+        record(fresh.revision, fresh.report.approvable, false);
+      }
     } catch {
+      if (n !== attempt.current) return;
       setValidated(null);
       toast.error("The engine's research check could not be run.");
     } finally {
-      setValidating(false);
+      if (n === attempt.current) setValidating(false);
     }
   };
 
@@ -114,10 +150,10 @@ export function G2Panel({ projectId, view, disabled }: { projectId: string; view
         <div className="space-y-2">
           <h4 className="text-sm font-medium">1. Validate, then approve</h4>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={validate} disabled={validating}>
+            <Button size="sm" variant="outline" onClick={validate} disabled={validating || Boolean(disabled)}>
               <ListChecks aria-hidden /> {validating ? "Validating…" : "Validate research"}
             </Button>
-            <Button size="sm" onClick={() => setApproveOpen(true)} disabled={!current?.approvable || Boolean(disabled)}>
+            <Button size="sm" onClick={() => current && setApproveFor(current.revision)} disabled={!current?.approvable || Boolean(disabled)}>
               <ShieldCheck aria-hidden /> Approve research (G2)…
             </Button>
           </div>
@@ -174,38 +210,38 @@ export function G2Panel({ projectId, view, disabled }: { projectId: string; view
           <Button size="sm" variant="outline" onClick={() => exp.mutate()} disabled={exp.isPending || Boolean(disabled) || !view.revision}>
             <FileOutput aria-hidden /> {exp.isPending ? "Exporting…" : "Export research records"}
           </Button>
-          <EditError error={exp.error} onReload={() => qc.invalidateQueries({ queryKey: qk.research(projectId) })} />
-          {exported ? (
-            <div className="text-sm" aria-live="polite">
-              {exported.written.length ? (
-                <>
-                  <p>Written:</p>
-                  <ul className="ml-4 list-disc">
-                    {exported.written.map((p) => (
-                      <li key={p}>
-                        <code className="text-xs">{p}</code>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <p>Every file was already up to date.</p>
-              )}
-            </div>
-          ) : null}
+          <div aria-live="polite" className="space-y-1 text-sm">
+            {exp.isPending ? <p className="text-muted-foreground">Exporting: the engine is writing the records…</p> : null}
+            {exp.isError ? (
+              <div className="space-y-1">
+                <p className="font-medium text-danger">Export failed: nothing was overwritten.</p>
+                <EditError error={exp.error} onReload={() => qc.invalidateQueries({ queryKey: qk.research(projectId) })} />
+              </div>
+            ) : null}
+            {exportShown ? (
+              <div className="space-y-1">
+                <p className="font-medium text-success">
+                  {exportShown.written.length ? `Exported: ${exportShown.written.length} file(s) written.` : "Exported: every file was already up to date."}
+                </p>
+                <ExportList label="Written" paths={exportShown.written} />
+                <ExportList label="Unchanged" paths={exportShown.unchanged} />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
-      {/* Kept open if the research changes meanwhile: it still sends the validated revision,
-          which the engine then refuses (input kept, "Reload latest"). */}
-      {approveOpen && validated ? (
+      {/* Bound to the revision it was opened for, for as long as it is open. If the research
+          changes meanwhile, it says so and offers no approval; the input is kept. */}
+      {approveFor ? (
         <ApproveDialog
           projectId={projectId}
-          revision={validated.revision}
-          onClose={() => setApproveOpen(false)}
+          revision={approveFor}
+          changed={approveFor !== loaded}
+          onClose={() => setApproveFor(null)}
           onDone={(r) => {
             done(r);
-            setApproveOpen(false);
+            setApproveFor(null);
             setValidated(null);
           }}
         />
@@ -214,14 +250,32 @@ export function G2Panel({ projectId, view, disabled }: { projectId: string; view
   );
 }
 
+function ExportList({ label, paths }: { label: string; paths: string[] }) {
+  if (!paths.length) return null;
+  return (
+    <div>
+      <p>{label}:</p>
+      <ul className="ml-4 list-disc">
+        {paths.map((p) => (
+          <li key={p}>
+            <code className="text-xs">{p}</code>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function ApproveDialog({
   projectId,
   revision,
+  changed,
   onClose,
   onDone,
 }: {
   projectId: string;
   revision: string;
+  changed: boolean;
   onClose: () => void;
   onDone: (r: { research: ResearchView }) => void;
 }) {
@@ -267,12 +321,18 @@ function ApproveDialog({
             ))}
           </ul>
         ) : null}
+        {changed ? (
+          <p role="alert" className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-sm text-warning">
+            The research changed after you validated it, so this approval would not cover it. Close this dialog, validate again, then
+            approve.
+          </p>
+        ) : null}
         <EditError error={m.error} onReload={() => qc.invalidateQueries({ queryKey: qk.research(projectId) })} />
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={() => m.mutate()} disabled={!reviewer.trim() || !attest || m.isPending}>
+          <Button onClick={() => m.mutate()} disabled={!reviewer.trim() || !attest || m.isPending || changed}>
             {m.isPending ? "Approving…" : "Approve research"}
           </Button>
         </DialogFooter>
