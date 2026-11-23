@@ -18,10 +18,27 @@ async function axe(page: Page) {
   ).toEqual([]);
 }
 
+/** Wait until the finite animations under `el` are over, so axe never scans a half-faded frame.
+ * A cancelled animation (for example a toast replaced or dismissed mid-way) rejects its
+ * `finished` promise with AbortError: that also means it is over, so the wait settles rather
+ * than fails. Animations started meanwhile are waited for too; infinite ones (spinners) never
+ * finish and are ignored. */
+async function animationsDone(el: Locator) {
+  await el.evaluate(async (node) => {
+    for (let round = 0; round < 20; round++) {
+      const running = node
+        .getAnimations({ subtree: true })
+        .filter((a) => a.playState !== "finished" && a.playState !== "idle" && a.effect?.getComputedTiming().iterations !== Infinity);
+      if (!running.length) return;
+      await Promise.allSettled(running.map((a) => a.finished));
+    }
+  });
+}
+
 async function settled(dialog: Locator) {
   // Scan a dialog only after its open animation, not a half-faded frame.
   await expect(dialog).toBeVisible();
-  await dialog.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
+  await animationsDone(dialog);
 }
 
 async function noHorizontalOverflow(page: Page) {
@@ -494,7 +511,7 @@ test("research review: import a document, link evidence, decide, outdated and co
   await expect(comp).toContainText("Attested by Trần Thị B", { timeout: 30_000 });
   await settled(comp);
   const toasts = page.getByRole("region", { name: /Notifications/ });
-  await toasts.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
+  await animationsDone(toasts);
   await axe(page);
 
   // The draft page lists the narration that is still fixture text.
@@ -655,7 +672,7 @@ test("G2: validate, approve the validated revision, apply, approve G1 again, exp
   await g2.getByRole("button", { name: "Export research records" }).click();
   await expect(g2.getByText("output/sources.md")).toBeVisible({ timeout: 30_000 });
   const toasts = page.getByRole("region", { name: /Notifications/ });
-  await toasts.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
+  await animationsDone(toasts);
   await axe(page);
 });
 
