@@ -113,14 +113,19 @@ The checkout uses `persist-credentials: false`, so the token is not left on the 
   - **Add URL** either queues a page (no network) or fetches it now, limited to that page's own host after you confirm it.
   - Snapshots open in a plain-text reader, served only when their SHA-256 matches the engine's record.
   - Every action carries the research revision you loaded. If the CLI or another job changed the research meanwhile, the engine refuses it and nothing is written.
-  - Claim decisions and research approval (G2) are not in the UI yet; use the CLI. Tool suggestions are never verdicts.
+  - **Review a claim** to edit it, see its evidence, and record a decision. No status is preselected, the tool suggestion is never a verdict, and **Verified** asks you to confirm first, listing the engine's rules. A decision made on a claim or evidence that changed since shows "Needs a new decision" and offers **Confirm again**. The history is append-only.
+  - **Link evidence** by selecting a passage in a snapshot: a dry run finds every occurrence, and you choose one. Translations are traced to their original passage.
+  - **Import document** adds an offline source with its citation (no network). Imported evidence is labelled as such and counts as primary only once you attest that edition.
+  - The Validation tab has the completeness attestation, the source rechecks, the full history and, for older projects, **Upgrade research records**.
+  - For fixture-drafted projects, the draft page's **Fixture text** panel lists the sentences that are still fixture text. You attest your rewrites there.
+  - Research approval (G2), apply and export are not in the UI yet; use the CLI.
 - **Statuses.** Engine stages (for example `Draft · Awaiting review`) and job statuses (`Succeeded`) are shown separately. Exit code 16 is treated as an expected human-review gate, not a crash.
 
 ## Security model
 
 - Loopback-only binding. The backend rejects any `Host` that isn't loopback and any `Origin` other than the UI.
 - Every state-changing request needs a per-process CSRF token from `/api/v1/session`. CORS is restricted to the UI origin.
-- Engine commands are built as argument lists from an allowlist of eleven operations: `--version`, `create`, `draft`, `production-status`, `draft-check`, `draft-approve`, `draft-edit`, `research-check`, `research-plan`, `research-collect` and `research-add-url`. Research network use always carries an explicit `--allow-host` per confirmed host; hosts are DNS names, never IP addresses. The only data sent on stdin is the `draft-edit` JSON patch, which is validated and limited to 1 MiB. Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
+- Engine commands are built as argument lists from an allowlist of fifteen operations: `--version`, `create`, `draft`, `production-status`, `draft-check`, `draft-approve`, `draft-edit`, `research-check`, `research-plan`, `research-collect`, `research-add-url`, `research-edit`, `research-add-document`, `narration-attest` and `narration-provenance-init`. Research network use always carries an explicit `--allow-host` per confirmed host; hosts are DNS names, never IP addresses. The only data sent on stdin is a validated `draft-edit` or `research-edit` JSON patch (≤1 MiB) or an imported document's plain text (≤400,000 characters). Every value is passed as a single `--option=value` element, and no shell is ever used. Force, replace and paid options can't be expressed.
 - The browser never supplies a filesystem path. Project folders are `<projects root>/<validated slug>` and are re-checked (no symlinks, still inside the root) right before each use. Artifacts are read only under fixed file names, with size limits and UTF-8 checks. Markdown is rendered without raw HTML.
 - Diagnostics are redacted (credentials, home directory) and truncated before they are stored or shown.
 

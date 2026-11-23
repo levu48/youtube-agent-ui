@@ -252,9 +252,33 @@ Common rules:
   - `unresolved_publication` → `409 unresolved_publication`.
 - Job success messages come from the job type ("Claim inventory prepared", "Source collection finished", "Source added"). The engine's own JSON and progress lines are shown as logs; there is no progress percentage.
 
+## Milestone 3, UI-B: research review (implemented)
+
+These endpoints are implemented in UI-B against engine `fb6bffc`. They replace the matching proposed rows below. Every write holds the project (`409 job_conflict` / `project_busy`), needs CSRF, and returns the refreshed view.
+
+| Method and path | Engine command | Body | Response and errors |
+|---|---|---|---|
+| `GET /projects/{id}/research` | as in UI-A | none | UI-A's fields, plus: `plan {claims (anchors with `context {before, excerpt, after}` or null), leads}`; `review {present, schema_version, supported, reviews, completeness, source_rechecks, primary_source_attestations, history_summary {count, last_seq}}`; `scenes`; `editing {supported, reason, migration_required, legacy_ids}` |
+| `GET /projects/{id}/research/history` | read of `research-review.json` | query: `kind`, `subject_id`, `after_seq`, `limit` ≤200 | `{entries, next_after_seq, has_more, chain_ok, revision}`. A `0.1` file gives `502 engine_unsupported`; `chain_ok` comes from the engine's `history_tampered` item |
+| `POST /projects/{id}/research/edit` | `research-edit --expect-revision=R --json [--dry-run]`, patch on stdin | `expected_revision`, `dry_run`, `operations` (1–200, the E2/E3 operations, strict) | `{result: {status, previous_revision, revision, changed_files, created, occurrences, check, approval_status}, research}`; there is no `research` for a dry run |
+| `POST /projects/{id}/research/documents` | `research-add-document … --expect-revision=R --json`, text on stdin | `expected_revision`, `title`, `language`, `citation`, `imported_by`, optional `edition`, `declared_url` (https), `original_published_at`, `license`, `note`, `new_version_of` (a `doc-` source of this project), `text` (≤400k characters). There is no `url` field | `{result: {source_id, snapshot_id, supersedes_snapshot_id, chars, revision}, research}` |
+| `GET /projects/{id}/draft/narration` | `research-check` plus a read of the lineage | none | `{revision, lineage {present, fixture_project, segments [{segment_id, section_id, scene_id, origin, text, norm, derived_from, attestation, initialized_from}]}, items (fixture_narration / narration_provenance_*), needs_init}` |
+| `POST /projects/{id}/draft/narration/attest` | `narration-attest --segment=… --reviewer=… --statement=… --expect-revision=R --json` | `expected_revision`, `reviewer`, `statement`, `segment_ids` (1–500 `seg-` IDs) | `{result: {status, segments, remaining, recovered, revision}, narration}` |
+| `POST /projects/{id}/draft/narration/provenance-init` | `narration-provenance-init --expect-revision=R --json` | `expected_revision`, `confirm: true` | as attest |
+
+**Error mapping:**
+- `revision_mismatch` → `409 revision_conflict`, with `details.current_revision`.
+- `invalid_patch` → `422 invalid_edit`, with `details.errors[{loc, msg, code}]`, where `code` is the engine operation's own code. The exception is the code `history_tampered`, which gives `409 history_tampered`.
+- `migration_required` → `409`.
+- `document_exists` → `422 invalid_edit`, with `details.source_id` and `snapshot_id`.
+- `lineage_refused` → `422`, or `409` for integrity reasons, with `details.reason`.
+- `human_edit_conflict` / `unresolved_publication` → `409`.
+- `invalid_input` → `422 invalid_edit`.
+- Request validation → `422 validation_error`, before any engine run.
+
 ## Milestone 3 (proposed): research and G2
 
-**Status: proposed.** UI-A implemented the rows above. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
+**Status: proposed.** UI-A and UI-B implemented the rows above; G2 approval, apply and export remain for UI-C. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
 
 | Method and path | Engine command | Body (main fields) | Response |
 |---|---|---|---|
