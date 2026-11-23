@@ -165,6 +165,17 @@ export function nextAction(
       engineHint: hint,
     };
   }
+  if (cur.stage === "draft" && cur.status === "needs_review" && /\bstale_after_apply\b/.test(cur.detail ?? "")) {
+    return {
+      kind: "review_draft",
+      title: "Approve the draft again",
+      description:
+        "Claim IDs from the research approval were applied to the scenes, so the editorial " +
+        "approval (gate G1) is out of date. Nothing else in the draft changed: review it and " +
+        "approve it again.",
+      engineHint: hint,
+    };
+  }
   if (cur.stage === "draft" && cur.status === "needs_review") {
     const stale = /\bstale\b/.test(cur.detail ?? "");
     return {
@@ -206,6 +217,25 @@ export const RESEARCH_APPROVAL: Record<string, Presentation> = {
   stale: { label: "G2 approval out of date", tone: "warning", icon: AlertTriangle },
   not_approved: { label: "G2 not approved", tone: "neutral", icon: CircleDashed },
 };
+
+/** G1 and G2 as production-status reports them (`G1 editorial: …`, `G2 research: …`). */
+export const GATE_LABEL: Record<string, Presentation> = {
+  approved: { label: "Approved", tone: "success", icon: CheckCircle2 },
+  approved_not_applied: { label: "Approved, claim IDs not applied yet", tone: "info", icon: CircleDot },
+  stale_after_apply: { label: "Out of date after apply: approve the draft again", tone: "warning", icon: AlertTriangle },
+  stale: { label: "Out of date", tone: "warning", icon: AlertTriangle },
+  needs_review: { label: "Needs review", tone: "neutral", icon: CircleDashed },
+  not_approved: { label: "Not approved", tone: "neutral", icon: CircleDashed },
+  pending: { label: "Pending", tone: "neutral", icon: CircleDashed },
+  recovery_required: { label: "Recovery required (use the CLI)", tone: "danger", icon: XCircle },
+  missing: { label: "No draft", tone: "neutral", icon: CircleDashed },
+  invalid: { label: "Invalid", tone: "danger", icon: XCircle },
+};
+
+export function gatePresentation(state: string | null | undefined): Presentation {
+  if (!state) return { label: "Not reported by the engine", tone: "neutral", icon: CircleDashed };
+  return GATE_LABEL[state] ?? { label: humanize(state), tone: "neutral", icon: CircleDashed };
+}
 
 /** Fetch outcomes recorded by the engine, in words. */
 export const FETCH_OUTCOME: Record<string, string> = {

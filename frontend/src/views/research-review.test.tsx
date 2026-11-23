@@ -595,3 +595,123 @@ describe("history pagination", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("G2 approval, apply and export", () => {
+  const REV2 = "b".repeat(64);
+  const approvable = (over: Partial<View> = {}, report: Record<string, unknown> = {}) =>
+    view({
+      gates: { g1: "approved", g2: "needs_review" },
+      ...over,
+      report: { ...view().report!, approvable: true, items: [], ...report },
+    } as Partial<View>);
+  const validation = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole("tab", { name: "Validation" }));
+    return screen.getByRole("region", { name: /Research approval \(G2\)/ });
+  };
+  const approved = (applied: boolean, g1 = "approved") =>
+    approvable({ gates: { g1, g2: applied ? "approved" : "approved_not_applied" } }, { approval_status: "approved", applied });
+  const result = (research: View, extra: Record<string, unknown>) => ({ json: { result: extra, research } });
+
+  it("approves only the revision that was validated, after an explicit attestation", async () => {
+    const v = approvable();
+    const after = approved(false);
+    const { calls, user } = setup({
+      "POST /projects/p1/research/approve": () =>
+        result(after, { status: "approved", revision: REV, approval: { reviewer: "Trần Thị B", approved_at: "2026-11-23T12:00:00Z",
+          comment: null, policy_version: "m5-research-3", meaning: "…" } }),
+    }, v);
+    const panel = await validation(user);
+    const approve = within(panel).getByRole("button", { name: /Approve research \(G2\)/ });
+    expect(approve).toBeDisabled(); // nothing validated yet, even though the report says approvable
+    await user.click(within(panel).getByRole("button", { name: "Validate research" }));
+    expect(await within(panel).findByText(/the engine reports the research is approvable/)).toBeInTheDocument();
+    await user.click(approve);
+    const dialog = await screen.findByRole("dialog", { name: "Approve the research (G2)?" });
+    expect(dialog).toHaveTextContent("not permission to publish");
+    const submit = within(dialog).getByRole("button", { name: "Approve research" });
+    await user.type(within(dialog).getByLabelText(/^Reviewer/), "Trần Thị B");
+    expect(submit).toBeDisabled(); // the attestation is not ticked
+    await user.click(within(dialog).getByLabelText(/I reviewed every claim/));
+    await user.click(submit);
+    await waitFor(() => expect(posted(calls, "/projects/p1/research/approve")).toHaveLength(1));
+    expect(posted(calls, "/projects/p1/research/approve")[0]).toEqual({ expected_revision: REV, reviewer: "Trần Thị B", confirm: true });
+    expect(await within(panel).findByText("Claim IDs not applied yet")).toBeInTheDocument();
+  });
+
+  it("asks to validate again when the research changed after validation", async () => {
+    let current = approvable();
+    mockFetch({
+      "GET /projects/p1": () => ({ json: { id: "p1", display_name: "Dự án", language: "vi" } }),
+      "GET /projects/p1/research": () => ({ json: current }),
+    });
+    const { client } = renderWithQuery(<ResearchView />);
+    const user = userEvent.setup();
+    const panel = await validation(user);
+    await user.click(within(panel).getByRole("button", { name: "Validate research" }));
+    await within(panel).findByText(/the engine reports the research is approvable/);
+    current = approvable({ revision: REV2 }, { revision: REV2 }); // e.g. a CLI edit
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["project", "p1", "research"] });
+    });
+    expect(await within(panel).findByText(/changed since you validated it: validate again/)).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /Approve research \(G2\)/ })).toBeDisabled();
+  });
+
+  it("never shows an out-of-date G2 approval as approved", async () => {
+    const { user } = setup({}, approvable({ gates: { g1: "approved", g2: "needs_review" } }, { approval_status: "stale" }));
+    const panel = await validation(user);
+    expect(within(panel).getByRole("alert")).toHaveTextContent("The G2 approval is out of date");
+    expect(within(panel).queryByText("G2 approved")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Validate research" })).toBeInTheDocument();
+  });
+
+  it("applies claim IDs only after a warning about G1, then leads to G1 re-approval", async () => {
+    const { calls, user } = setup({
+      "POST /projects/p1/research/apply": () =>
+        result(approved(true, "stale_after_apply"), { status: "published", scenes_changed: ["scene-001"], written: ["storyboard.draft.json"], revision: REV }),
+    }, approved(false));
+    const panel = await validation(user);
+    await user.click(within(panel).getByRole("button", { name: /Apply claim IDs to scenes/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Apply claim IDs to the scenes?" });
+    expect(dialog).toHaveTextContent("editorial approval (G1) then goes out of date");
+    expect(posted(calls, "/projects/p1/research/apply")).toHaveLength(0);
+    await user.click(within(dialog).getByRole("button", { name: "Apply claim IDs" }));
+    await waitFor(() => expect(posted(calls, "/projects/p1/research/apply")).toEqual([{ expected_revision: REV, confirm: true }]));
+    const link = await within(panel).findByRole("link", { name: "Approve the draft again" });
+    expect(link).toHaveAttribute("href", "/projects/p1/draft");
+    expect(within(panel).getByText("Out of date after apply: approve the draft again")).toBeInTheDocument();
+  });
+
+  it("exports after apply, and shows the engine's refusal to overwrite hand edits", async () => {
+    let refuse = false;
+    const { user } = setup({
+      "POST /projects/p1/research/export": () =>
+        refuse
+          ? { status: 409, json: { error: { code: "human_edit_conflict", message: "The engine refused to overwrite hand edits (output/sources.md). The UI never overwrites them: keep or restore them in the CLI first.", details: { paths: ["output/sources.md"] } } } }
+          : result(approved(true), { written: ["output/sources.md", "render/research/citation-plan.json"], unchanged: [], revision: REV }),
+    }, approved(true));
+    const panel = await validation(user);
+    expect(within(panel).queryByText(/G1 is out of date after apply/)).toBeNull();
+    await user.click(within(panel).getByRole("button", { name: "Export research records" }));
+    expect(await within(panel).findByText("output/sources.md")).toBeInTheDocument();
+    refuse = true;
+    await user.click(within(panel).getByRole("button", { name: "Export research records" }));
+    expect(await within(panel).findByText(/refused to overwrite hand edits \(output\/sources.md\)/)).toBeInTheDocument();
+  });
+
+  it("lists the engine's blocking items when it refuses the approval", async () => {
+    const { user } = setup({
+      "POST /projects/p1/research/approve": () => ({ status: 422, json: { error: { code: "not_approvable", message: "research is not approvable:",
+        details: { items: [{ code: "completeness_stale", detail: "the completeness attestation is for a different claim inventory" }] } } } }),
+    }, approvable());
+    const panel = await validation(user);
+    await user.click(within(panel).getByRole("button", { name: "Validate research" }));
+    await within(panel).findByText(/approvable/);
+    await user.click(within(panel).getByRole("button", { name: /Approve research \(G2\)/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Approve the research (G2)?" });
+    await user.type(within(dialog).getByLabelText(/^Reviewer/), "Trần Thị B");
+    await user.click(within(dialog).getByLabelText(/I reviewed every claim/));
+    await user.click(within(dialog).getByRole("button", { name: "Approve research" }));
+    expect(await within(dialog).findByText(/the completeness attestation is for a different claim inventory/)).toBeInTheDocument();
+  });
+});

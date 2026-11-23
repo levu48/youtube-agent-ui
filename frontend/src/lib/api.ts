@@ -467,6 +467,25 @@ export interface ResearchView {
   review?: ReviewFileView | null;
   scenes?: SceneNarration[];
   editing?: ResearchEditing;
+  // UI-C: the gate states production-status reports (`G1 editorial: …`, `G2 research: …`).
+  gates?: { g1: string | null; g2: string | null };
+}
+
+export interface ResearchApproveResult {
+  status: "approved" | "already_approved";
+  revision: string | null;
+  approval: { reviewer: string; approved_at: string; comment: string | null; policy_version: string; meaning: string };
+}
+export interface ResearchApplyResult {
+  status: "published" | "already_current";
+  scenes_changed: string[];
+  written: string[];
+  revision: string | null;
+}
+export interface ResearchExportResult {
+  written: string[];
+  unchanged: string[];
+  revision: string | null;
 }
 
 export interface AnchorView {
@@ -844,6 +863,15 @@ export const api = {
       body,
     ),
   narration: (id: string) => request<NarrationView>(`/projects/${encodeURIComponent(id)}/draft/narration`),
+  researchApprove: (id: string, body: { expected_revision: string; reviewer: string; comment?: string; confirm: true }) =>
+    post<{ result: ResearchApproveResult; research: ResearchView }>(`/projects/${encodeURIComponent(id)}/research/approve`, body),
+  researchApply: (id: string, expected_revision: string) =>
+    post<{ result: ResearchApplyResult; research: ResearchView }>(`/projects/${encodeURIComponent(id)}/research/apply`, {
+      expected_revision,
+      confirm: true,
+    }),
+  researchExport: (id: string, expected_revision: string) =>
+    post<{ result: ResearchExportResult; research: ResearchView }>(`/projects/${encodeURIComponent(id)}/research/export`, { expected_revision }),
   narrationAttest: (id: string, body: { expected_revision: string; reviewer: string; statement: string; segment_ids: string[] }) =>
     post<{ result: LineageResult; narration: NarrationView }>(`/projects/${encodeURIComponent(id)}/draft/narration/attest`, body),
   provenanceInit: (id: string, expected_revision: string) =>

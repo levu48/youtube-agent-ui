@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StatusSummary } from "@/lib/api";
 import { formatDuration, slugify } from "@/lib/format";
-import { JOB_STATUS, approvalPresentation, displayUrl, nextAction, stagePresentation, stageSummary } from "@/lib/status";
+import { JOB_STATUS, approvalPresentation, displayUrl, gatePresentation, nextAction, stagePresentation, stageSummary } from "@/lib/status";
 import { minutesToSeconds, validateCreate, type CreateFormValues } from "@/lib/validation";
 
 const base: CreateFormValues = {
@@ -80,6 +80,16 @@ describe("status presentation", () => {
     expect(stale.kind).toBe("review_draft");
     expect(stale.title).toBe("Review the draft again");
     expect(nextAction(s("needs_review", "G1 editorial: not_approved"), null).title).toBe("Review the draft");
+    const afterApply = nextAction(s("needs_review", "G1 editorial: stale_after_apply"), null);
+    expect(afterApply.kind).toBe("review_draft");
+    expect(afterApply.title).toBe("Approve the draft again");
+    expect(afterApply.description).toMatch(/Claim IDs .* were applied to the scenes/);
+  });
+  it("labels gate states as production-status reports them, and never invents one", () => {
+    expect(gatePresentation("approved_not_applied").label).toBe("Approved, claim IDs not applied yet");
+    expect(gatePresentation("stale_after_apply").tone).toBe("warning");
+    expect(gatePresentation(null).label).toBe("Not reported by the engine");
+    expect(gatePresentation("new_engine_state").label).toBe("New engine state");
   });
   it("labels engine approval states without inventing them", () => {
     expect(approvalPresentation("approved").label).toBe("G1 approved");
