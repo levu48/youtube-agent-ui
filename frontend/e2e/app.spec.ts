@@ -414,6 +414,97 @@ test("research: prepare claims, a confirmed search, a queued and a fetched URL, 
   await expect(page.getByRole("heading", { name: "Validation (research-check)" })).toBeVisible();
 });
 
+test("research review: import a document, link evidence, decide, outdated and confirmed again, completeness, fixture text", async ({ page }) => {
+  const doc =
+    "Ngày 2 tháng 9 năm 1945, tại Quảng trường Ba Đình ở Hà Nội, Chủ tịch Hồ Chí Minh đọc bản Tuyên ngôn Độc lập, khai sinh nước Việt Nam Dân chủ Cộng hòa.";
+  await page.goto("/projects/hcm-demo/research");
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await page.getByRole("button", { name: /Import document/ }).click();
+  const imp = page.getByRole("dialog", { name: "Import a document" });
+  await imp.getByLabel(/^Title/).fill("Tuyên ngôn Độc lập (trích)");
+  await imp.getByLabel(/^Language/).fill("vi");
+  await imp.getByLabel(/^Citation/).fill("Hồ Chí Minh, Toàn tập, tập 4, NXB Chính trị quốc gia, 2011, tr. 1");
+  await imp.getByLabel(/^Imported by/).fill("Trần Thị B");
+  await imp.getByLabel(/^Text/).fill(doc);
+  await settled(imp);
+  await axe(page);
+  await imp.getByRole("button", { name: /^Import document/ }).click();
+  await expect(imp).toBeHidden();
+
+  // Link a passage from the reader, after the dry run located it.
+  await page.getByRole("button", { name: /Read Tuyên ngôn Độc lập \(trích\)/ }).click();
+  const reader = page.getByRole("dialog", { name: "Tuyên ngôn Độc lập (trích)" });
+  await expect(reader).toContainText("Imported document — not retrieved by the engine");
+  await reader.getByRole("button", { name: /Link a passage to a claim/ }).click();
+  const link = page.getByRole("dialog", { name: "Link to claim" });
+  const claimSelect = link.getByLabel(/^Claim/);
+  const claimId = await claimSelect.locator("option").nth(1).getAttribute("value");
+  await claimSelect.selectOption(claimId!);
+  await link.getByLabel(/Passage/).fill("Quảng trường Ba Đình");
+  await link.getByLabel(/^Role/).selectOption("supports");
+  await link.getByLabel(/Explanation/).fill("Văn bản nêu địa điểm của sự kiện.");
+  await link.getByRole("button", { name: /Find the passage/ }).click();
+  await expect(link).toContainText("found once");
+  await settled(link);
+  await axe(page);
+  await link.getByRole("button", { name: /Link evidence/ }).click();
+  await expect(link).toBeHidden();
+  await page.keyboard.press("Escape");
+
+  // A decision: no status is preselected.
+  await page.getByRole("tab", { name: "Claims" }).click();
+  const card = page.locator(`#claim-${claimId}`);
+  await card.getByRole("button", { name: /Review this claim/ }).click();
+  await expect(card.getByRole("region", { name: "Supports evidence" })).toContainText("Imported document — not retrieved by the engine");
+  const decision = card.getByRole("region", { name: `Decision for ${claimId}` });
+  await decision.getByRole("button", { name: /Record a decision/ }).click();
+  await expect(decision.getByRole("radio", { checked: true })).toHaveCount(0);
+  await decision.getByRole("radio", { name: /^Insufficient/ }).check();
+  await decision.getByLabel(/^Reviewer/).fill("Trần Thị B");
+  await decision.getByLabel(/^Rationale/).fill("Chỉ có một nguồn được nhập, chưa đủ để xác minh câu này.");
+  await settled(decision); // the save button's enabling transition
+  await axe(page);
+  await decision.getByRole("button", { name: "Save decision" }).click();
+  // Wait for the engine to record it: the form closes and the claim shows the decision.
+  await expect(decision.getByRole("button", { name: "Save decision" })).toBeHidden({ timeout: 30_000 });
+  await expect(decision.getByText("Rationale:")).toBeVisible();
+
+  // Changing the claim makes the decision outdated; Confirm again records it anew.
+  await card.getByRole("button", { name: "Edit claim" }).click();
+  await card.getByRole("checkbox", { name: "Named subject" }).check();
+  await card.getByRole("button", { name: "Save claim" }).click();
+  await expect(card.getByRole("button", { name: "Save claim" })).toBeHidden({ timeout: 30_000 });
+  await expect(card.getByText("Needs a new decision").first()).toBeVisible();
+  await decision.getByRole("button", { name: /Confirm again/ }).click();
+  await expect(decision.getByRole("radio", { name: /^Insufficient/ })).toBeChecked();
+  await decision.getByRole("button", { name: "Save decision" }).click();
+  await expect(decision.getByRole("button", { name: "Save decision" })).toBeHidden({ timeout: 30_000 });
+  await expect(card.getByText("Needs a new decision")).toHaveCount(0);
+  await decision.getByText("Decision history").click();
+  await expect(decision.getByText(/#\d+ Replaced/).first()).toBeVisible();
+
+  // Completeness.
+  await page.getByRole("tab", { name: /^Validation/ }).click();
+  const comp = page.getByRole("region", { name: "Completeness" });
+  await comp.getByRole("button", { name: /Attest completeness/ }).click();
+  await comp.getByLabel(/^Reviewer/).fill("Trần Thị B");
+  await comp.getByLabel(/^Statement/).fill("Mọi câu có nội dung sự kiện đều đã có claim tương ứng.");
+  await comp.getByRole("button", { name: "Attest" }).click();
+  await expect(comp).toContainText("Attested by Trần Thị B", { timeout: 30_000 });
+  await settled(comp);
+  const toasts = page.getByRole("region", { name: /Notifications/ });
+  await toasts.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
+  await axe(page);
+
+  // The draft page lists the narration that is still fixture text.
+  await page.goto("/projects/hcm-demo/draft");
+  await openTab(page, "Validation");
+  const fixture = page.getByRole("region", { name: "Fixture text" });
+  await expect(fixture).toContainText("fixture_narration");
+  await expect(fixture.getByText("Fixture text").first()).toBeVisible();
+  await axe(page);
+});
+
 test("unknown project and missing draft states", async ({ page }) => {
   await page.goto("/projects/does-not-exist");
   await expect(page.getByText("Project not found")).toBeVisible();

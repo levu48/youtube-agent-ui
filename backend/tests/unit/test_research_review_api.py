@@ -189,7 +189,7 @@ def test_claim_update_add_and_remove_publish_one_generation(client, planned):
             {"op": "claims.update", "id": "clm-001-fake", "flags": ["date"], "contested": True},
             {
                 "op": "claims.add",
-                "anchor": {"scene_id": "scene-001", "excerpt": "Ba Đình"},
+                "anchor": {"scene_id": "scene-001", "excerpt": "nhà cung cấp thử nghiệm"},
                 "assertion": "Buổi lễ diễn ra ở Ba Đình.",
                 "kind": "factual",
             },

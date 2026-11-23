@@ -12,6 +12,7 @@ import { ApprovalPanel } from "@/components/draft/approval-panel";
 import { ConflictDialog } from "@/components/draft/conflict-dialog";
 import { DraftContent } from "@/components/draft/draft-content";
 import { DraftValidationPanel } from "@/components/draft/draft-validation-panel";
+import { FixturePanel } from "@/components/draft/fixture-panel";
 import { SafeMarkdown } from "@/components/draft/safe-markdown";
 import { OutlineDocumentEditor, OutlineSectionEditor, ScriptSectionEditor } from "@/components/draft/section-editor";
 import { PageHeader } from "@/components/page-header";
@@ -348,7 +349,7 @@ export function DraftView() {
                   <strong>Editing is not available.</strong> {editing.reason}
                 </p>
                 {editing.paths.length ? (
-                  <p className="mt-1 text-muted-foreground">Depends on the draft: {editing.paths.join(", ")}</p>
+                  <p className="mt-1">Depends on the draft: {editing.paths.join(", ")}</p>
                 ) : null}
               </div>
             ) : null}
@@ -546,6 +547,7 @@ export function DraftView() {
                       unsaved={dirty}
                     />
                   ) : null}
+                  {d.available ? <FixturePanel projectId={projectId} lang={project.data?.language ?? undefined} unsaved={dirty} /> : null}
                 </div>
               ) : null}
 

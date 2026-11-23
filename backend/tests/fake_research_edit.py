@@ -199,7 +199,19 @@ class Work:
                     c[k] = op[k]
         elif name == "claims.add":
             a = op["anchor"]
-            excerpt = a.get("excerpt") or "excerpt"
+            sb = F._read(self.root, "storyboard.draft.json", {"scenes": []})
+            narr = next(
+                (x["narration"] for x in sb.get("scenes", []) if x.get("id") == a["scene_id"]), None
+            )
+            if narr is None:
+                raise Refused("unknown_scene", f"unknown scene {a['scene_id']!r}")
+            narr = unicodedata.normalize("NFC", narr)
+            if "excerpt" in a:
+                start = self.locate(i, "excerpt", narr, a["excerpt"], a.get("occurrence"))
+                a = {"scene_id": a["scene_id"], "start": start, "end": start + len(a["excerpt"])}
+            excerpt = narr[a["start"] : a["end"]]
+            if not excerpt.strip():
+                raise Refused("bad_anchor", "the anchor is only whitespace")
             cid = f"clm-{len(self.plan['claims']) + 1:03d}-editor"
             self.plan["claims"].append(
                 {

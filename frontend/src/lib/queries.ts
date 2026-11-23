@@ -16,6 +16,8 @@ export const qk = {
   // Under the project key, so a finished job's refresh covers it.
   research: (id: string) => ["project", id, "research"] as const,
   snapshot: (id: string, snapshotId: string) => ["project", id, "snapshot", snapshotId] as const,
+  history: (id: string, subject?: string) => ["project", id, "research-history", subject ?? "all"] as const,
+  narration: (id: string) => ["project", id, "narration"] as const,
   jobs: (projectId?: string) => ["jobs", projectId ?? "all"] as const,
   job: (id: string) => ["job", id] as const,
   discoverable: ["discoverable"] as const,
