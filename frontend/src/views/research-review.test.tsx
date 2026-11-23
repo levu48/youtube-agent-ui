@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FixturePanel } from "@/components/draft/fixture-panel";
 import { AddClaimDialog } from "@/components/research/add-claim-dialog";
+import { HistoryDisclosure } from "@/components/research/decision-panel";
 import { LinkDialog } from "@/components/research/link-dialog";
 import type { ResearchView as View } from "@/lib/api";
 import { mockFetch, renderWithQuery } from "@/test/utils";
@@ -468,6 +469,45 @@ describe("occurrence searches answering out of order", () => {
 });
 
 describe("evidence root", () => {
+  const rootView = (root: string | null) =>
+    view({
+      evidence: [{ id: "ev-00000000000000e1", claim_id: CID, snapshot_id: SNAP, start: 0, end: 4, quote: "Ngày", role: "supports",
+        explanation: "Văn bản nêu ngày diễn ra sự kiện.", source_type: "secondary", evidence_root: root, original_language: null,
+        is_translation: false, translation_of: null, translator: null }],
+    } as unknown as Partial<View>);
+
+  it("leaves an existing root out of the update when it is unchanged", async () => {
+    const v = rootView("root-tuyen-ngon");
+    const { calls, user } = setup({ "POST /projects/p1/research/edit": () => EDITED(v) }, v);
+    await openReview(user);
+    await user.click(screen.getByRole("button", { name: /Edit link/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit evidence link" });
+    const root = within(dialog).getByLabelText(/Evidence root/);
+    await user.type(root, " "); // whitespace around the same value is no change
+    await user.type(within(dialog).getByLabelText(/Explanation/), " Thêm chi tiết.");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Save link" }));
+    await waitFor(() => expect(posted(calls)).toHaveLength(1));
+    expect(opOf(posted(calls)[0])).toEqual({
+      op: "evidence.update", link_id: "ev-00000000000000e1", explanation: "Văn bản nêu ngày diễn ra sự kiện. Thêm chi tiết.",
+    });
+  });
+
+  it("shows the engine's new root after an update", async () => {
+    const before = rootView("root-tuyen-ngon");
+    const { user } = setup({ "POST /projects/p1/research/edit": () => EDITED(rootView("root-ban-in")) }, before);
+    await openReview(user);
+    expect(screen.getByRole("region", { name: "Supports evidence" })).toHaveTextContent("root root-tuyen-ngon");
+    await user.click(screen.getByRole("button", { name: /Edit link/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit evidence link" });
+    const root = within(dialog).getByLabelText(/Evidence root/);
+    await user.clear(root);
+    await user.type(root, "root-ban-in");
+    await user.click(within(dialog).getByRole("button", { name: "Save link" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit evidence link" })).toBeNull());
+    expect(screen.getByRole("region", { name: "Supports evidence" })).toHaveTextContent("root root-ban-in");
+  });
+
   it("never reports a save while silently keeping a root the reviewer emptied", async () => {
     const v = view({
       evidence: [{ id: "ev-00000000000000e1", claim_id: CID, snapshot_id: SNAP, start: 0, end: 4, quote: "Ngày", role: "supports",
@@ -489,5 +529,69 @@ describe("evidence root", () => {
     await user.click(save);
     await waitFor(() => expect(posted(calls)).toHaveLength(1));
     expect(opOf(posted(calls)[0])).toMatchObject({ op: "evidence.update", evidence_root: "root-ban-in" });
+  });
+});
+
+describe("history pagination", () => {
+  const entry = (seq: number) => ({
+    id: `hist-${seq}`, seq, kind: "claim_review", subject_id: CID, action: "replaced", at: `2026-11-2${seq}T10:00:00Z`,
+    by_reviewer: "Trần Thị B", reason: `lý do ${seq}`, previous: { status: "disputed" }, outdated_components: [],
+  });
+  const page = (seqs: number[], has_more: boolean) => ({
+    json: { entries: seqs.map(entry), next_after_seq: seqs.at(-1) ?? null, has_more, chain_ok: true, revision: REV, report_error: null },
+  });
+
+  async function openHistory() {
+    renderWithQuery(<HistoryDisclosure projectId="p1" kind="claim_review" subjectId={CID} label="Decision history" pageSize={2} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText("Decision history"));
+    return user;
+  }
+  const seqsShown = () => screen.getAllByRole("listitem").map((li) => li.textContent?.match(/^#(\d+)/)?.[1]);
+
+  it("loads later pages after the last seq, keeping the filters, without duplicates", async () => {
+    const calls = mockFetch({
+      "GET /projects/p1/research/history": (_b, q) => {
+        const after = Number(q?.get("after_seq") ?? 0);
+        return after === 0 ? page([1, 2], true) : after === 2 ? page([2, 3, 4], true) : page([5], false);
+      },
+    });
+    const user = await openHistory();
+    await screen.findByText(/lý do 2/);
+    expect(seqsShown()).toEqual(["1", "2"]);
+    expect(screen.getByText(/oldest first; later entries follow/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText(/lý do 4/);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText(/lý do 5/);
+    expect(seqsShown()).toEqual(["1", "2", "3", "4", "5"]);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    const queries = calls.filter((c) => c.path === "/projects/p1/research/history").map((c) => Object.fromEntries(c.query));
+    expect(queries).toEqual([
+      { kind: "claim_review", subject_id: CID, limit: "2" },
+      { kind: "claim_review", subject_id: CID, after_seq: "2", limit: "2" },
+      { kind: "claim_review", subject_id: CID, after_seq: "4", limit: "2" },
+    ]);
+  });
+
+  it("keeps the loaded entries when a later page fails, and retries", async () => {
+    let fail = true;
+    mockFetch({
+      "GET /projects/p1/research/history": (_b, q) => {
+        if (!q?.get("after_seq")) return page([1, 2], true);
+        if (fail) return { status: 502, json: { error: { code: "engine_unsupported", message: "The engine could not read the history." } } };
+        return page([3], false);
+      },
+    });
+    const user = await openHistory();
+    await screen.findByText(/lý do 2/);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more history: The engine could not read the history.");
+    expect(seqsShown()).toEqual(["1", "2"]);
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText(/lý do 3/);
+    expect(seqsShown()).toEqual(["1", "2", "3"]);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

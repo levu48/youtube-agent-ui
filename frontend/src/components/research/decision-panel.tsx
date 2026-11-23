@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { AlertTriangle, History, RotateCcw } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
@@ -356,24 +356,36 @@ const ACTIONS: Record<string, string> = {
   migrated: "Records upgraded",
 };
 
-/** The append-only history from the engine's review file, loaded when opened. */
+const HISTORY_PAGE = 200; // the backend maximum (HISTORY_PAGE_MAX)
+
+/** The append-only history from the engine's review file, loaded when opened. The backend
+ * pages it in ascending `seq` (oldest first): `after_seq` asks for the entries after a seq,
+ * so "Load more" appends newer entries below the ones shown. */
 export function HistoryDisclosure({
   projectId,
   kind,
   subjectId,
   label,
+  pageSize = HISTORY_PAGE,
 }: {
   projectId: string;
   kind?: string;
   subjectId?: string;
   label: string;
+  pageSize?: number;
 }) {
   const [open, setOpen] = useState(false);
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: [...qk.history(projectId, subjectId), kind ?? "all"],
-    queryFn: () => api.researchHistory(projectId, { kind, subject_id: subjectId, limit: 200 }),
+    queryFn: ({ pageParam }) => api.researchHistory(projectId, { kind, subject_id: subjectId, after_seq: pageParam || undefined, limit: pageSize }),
+    initialPageParam: 0,
+    getNextPageParam: (last) => (last.has_more && last.next_after_seq !== null ? last.next_after_seq : undefined),
     enabled: open,
   });
+  const pages = q.data?.pages ?? [];
+  // One entry per seq, in seq order, even if a page overlaps an earlier one.
+  const entries = [...new Map(pages.flatMap((p) => p.entries).map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
+  const latest = pages.at(-1);
   return (
     <details onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)} className="text-sm">
       <summary className="inline-flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
@@ -381,21 +393,35 @@ export function HistoryDisclosure({
       </summary>
       <div className="mt-2 space-y-2">
         {q.isLoading ? <p className="text-muted-foreground">Loading…</p> : null}
-        {q.isError ? <p className="text-danger">{(q.error as Error).message}</p> : null}
-        {q.data?.chain_ok === false ? (
+        {q.isError && !pages.length ? <p className="text-danger">{(q.error as Error).message}</p> : null}
+        {pages.some((p) => p.chain_ok === false) ? (
           <p role="alert" className="text-danger">
             The engine reports that this history is not intact (history_tampered).
           </p>
         ) : null}
-        {q.data && !q.data.entries.length ? <p className="text-muted-foreground">No earlier records.</p> : null}
-        {q.data?.entries.length ? (
+        {pages.length && !entries.length ? <p className="text-muted-foreground">No earlier records.</p> : null}
+        {entries.length ? (
           <ol className="space-y-2">
-            {q.data.entries.map((e) => (
-              <HistoryItem key={e.id} e={e} />
+            {entries.map((e) => (
+              <HistoryItem key={e.seq} e={e} />
             ))}
           </ol>
         ) : null}
-        {q.data?.has_more ? <p className="text-xs text-muted-foreground">Older entries continue in the full history.</p> : null}
+        {q.isFetchNextPageError ? (
+          <p role="alert" className="text-danger">
+            Could not load more history: {(q.error as Error).message}
+          </p>
+        ) : null}
+        {latest?.has_more ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void q.fetchNextPage()} disabled={q.isFetchingNextPage}>
+              {q.isFetchingNextPage ? "Loading…" : q.isFetchNextPageError ? "Try again" : "Load more"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Showing {entries.length} entries, oldest first; later entries follow.
+            </span>
+          </div>
+        ) : null}
       </div>
     </details>
   );
