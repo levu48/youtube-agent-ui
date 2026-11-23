@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.api.research_routes import router as research_router
 from app.api.routes import router
 from app.config import Settings
 from app.engine.runner import EngineCLI
@@ -55,6 +56,7 @@ def create_app(settings: Settings | None = None, *, cli: EngineCLI | None = None
         allow_credentials=False,
     )
     app.include_router(router)
+    app.include_router(research_router)
     return app
 
 

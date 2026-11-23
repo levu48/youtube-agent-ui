@@ -759,46 +759,12 @@ def _research_failure(res, what: str) -> ApiError:
 
 @router.get("/projects/{project_id}/research")
 async def project_research(project_id: str, s: State) -> dict:
-    """The research workspace view: the engine's research-check report (with its revision),
-    plus read-only source, snapshot and evidence records. Nothing is written."""
+    """The research workspace view (see ``research_routes.research_view``). Nothing is
+    written."""
+    from app.api.research_routes import research_view
+
     row = s.projects.require(project_id)
-    root = s.projects.confined_root(row)
-    report, report_error = None, None
-    try:
-        report = await s.engine.research_check(root)
-    except Exception as exc:  # normalised; the page shows why the report is missing
-        pe = to_public(exc, operation="research-check")
-        report_error = {"code": pe.code, "message": pe.message}
-    try:
-        records = {
-            "sources": RS.sources(root),
-            "snapshots": RS.snapshots(root),
-            "evidence": RS.evidence(root),
-            "records_error": None,
-        }
-    except RS.ResearchReadError as exc:
-        records = {
-            "sources": [],
-            "snapshots": [],
-            "evidence": [],
-            "records_error": {"code": exc.code, "message": exc.message},
-        }
-    status = await _status(s, row, fresh=False)
-    stage = next((st.model_dump() for st in status.stages if st.stage == "research"), None)
-    active = s.jobs.active_for(project_id)
-    return {
-        "report": report,
-        "report_error": report_error,
-        "revision": report.get("revision") if report else None,
-        "started": RS.research_started(root),
-        **records,
-        "stage": stage,
-        "network": {
-            "enabled": s.settings.research_network,
-            "search_provider": _search_provider(s),
-        },
-        "active_job_id": active.id if active else None,
-    }
+    return await research_view(s, row, s.projects.confined_root(row))
 
 
 @router.get("/projects/{project_id}/research/snapshots/{snapshot_id}")

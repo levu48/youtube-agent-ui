@@ -44,6 +44,10 @@ class EngineOp(StrEnum):
     RESEARCH_PLAN = "research-plan"
     RESEARCH_COLLECT = "research-collect"
     RESEARCH_ADD_URL = "research-add-url"
+    RESEARCH_EDIT = "research-edit"
+    RESEARCH_ADD_DOCUMENT = "research-add-document"
+    NARRATION_ATTEST = "narration-attest"
+    NARRATION_PROVENANCE_INIT = "narration-provenance-init"
 
 
 class ArgumentError(ValueError):
@@ -321,6 +325,96 @@ def research_add_url_args(
         argv.append(f"--allow-host={host}")
     argv += [_revision(expect_revision), "--json"]
     return argv
+
+
+def research_edit_args(root: Path, *, expect_revision: str, dry_run: bool = False) -> list[str]:
+    """Claims, evidence, translations, decisions, completeness, rechecks and attestations as one
+    publication (engine D-119/D-120); the JSON patch goes on stdin."""
+    argv = [EngineOp.RESEARCH_EDIT.value, _root(root), _revision(expect_revision), "--json"]
+    if dry_run:
+        argv.append("--dry-run")
+    return argv
+
+
+DOC_ID_RE = re.compile(r"^doc-[0-9a-f]{16}$")
+SEGMENT_ID_RE = re.compile(r"^seg-[0-9a-f]{16}$")
+# Engine limits (D-120): research-add-document provenance fields.
+DOCUMENT_FIELDS = {
+    "title": (1, 300, True),
+    "language": (2, 20, True),
+    "citation": (1, 2000, True),
+    "imported_by": (1, 200, True),
+    "edition": (1, 200, False),
+    "declared_url": (9, MAX_URL, False),
+    "original_published_at": (1, 100, False),
+    "license": (1, 200, False),
+    "note": (1, 4000, False),
+}
+
+
+def research_add_document_args(
+    root: Path, *, expect_revision: str, new_version_of: str | None = None, **fields: str | None
+) -> list[str]:
+    """Import an offline document (engine D-120): provenance as separate argv elements, the
+    text on stdin. No network: a declared URL is stored as data and never fetched."""
+    unknown = set(fields) - set(DOCUMENT_FIELDS)
+    if unknown:
+        raise ArgumentError(f"unknown document fields: {sorted(unknown)}")
+    argv = [EngineOp.RESEARCH_ADD_DOCUMENT.value, _root(root)]
+    for name, (lo, hi, required) in DOCUMENT_FIELDS.items():
+        value = fields.get(name)
+        if value is None or value == "":
+            if required:
+                raise ArgumentError(f"{name} is required")
+            continue
+        if not isinstance(value, str) or _CONTROL_RE.search(value) or not lo <= len(value) <= hi:
+            raise ArgumentError(f"{name} must be {lo}-{hi} characters without control characters")
+        if name == "declared_url":
+            url_host(value)
+        argv.append(f"--{name.replace('_', '-')}={value}")
+    if new_version_of is not None:
+        if not isinstance(new_version_of, str) or not DOC_ID_RE.fullmatch(new_version_of):
+            raise ArgumentError("new_version_of must be a doc- source id")
+        argv.append(f"--new-version-of={new_version_of}")
+    argv += [_revision(expect_revision), "--json"]
+    return argv
+
+
+def narration_attest_args(
+    root: Path, *, expect_revision: str, reviewer: str, statement: str, segment_ids: list[str]
+) -> list[str]:
+    """Attest rewritten fixture-derived sentences (engine D-120); the engine decides."""
+    ids = list(dict.fromkeys(segment_ids))
+    if not ids or len(ids) > 500:
+        raise ArgumentError("give 1-500 segments")
+    argv = [EngineOp.NARRATION_ATTEST.value, _root(root)]
+    for sid in ids:
+        if not isinstance(sid, str) or not SEGMENT_ID_RE.fullmatch(sid):
+            raise ArgumentError(f"not a segment id: {sid!r}")
+        argv.append(f"--segment={sid}")
+    who = clean_text("reviewer", reviewer, required=True)
+    if (
+        not isinstance(statement, str)
+        or _CONTROL_RE.search(statement)
+        or not 1 <= len(statement.strip()) <= 4000
+    ):
+        raise ArgumentError("statement must be 1-4000 characters without control characters")
+    argv += [
+        f"--reviewer={who}",
+        f"--statement={statement.strip()}",
+        _revision(expect_revision),
+        "--json",
+    ]
+    return argv
+
+
+def narration_provenance_init_args(root: Path, *, expect_revision: str) -> list[str]:
+    return [
+        EngineOp.NARRATION_PROVENANCE_INIT.value,
+        _root(root),
+        _revision(expect_revision),
+        "--json",
+    ]
 
 
 ALLOWED_SUBCOMMANDS = frozenset(op.value for op in EngineOp if op is not EngineOp.VERSION)

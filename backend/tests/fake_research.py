@@ -112,47 +112,128 @@ def check(root: Path) -> int:
             }
         ]
     )
+    import fake_research_edit as E
+
     claims = []
+    rf = E.review_file(root)
+    links = _read(root, "evidence.json", {"links": []}).get("links", [])
+    index = _read(root, "render/research/snapshots.json", {"snapshots": {}})["snapshots"]
+
+    def ref(x: dict) -> dict:
+        snap = index.get(x["snapshot_id"]) or {}
+        return {
+            "snapshot_id": x["snapshot_id"],
+            "source_id": snap.get("source_id"),
+            "start": x["start"],
+            "end": x["end"],
+            "source_type": x.get("source_type", "unknown"),
+            "acquisition": snap.get("acquisition"),
+            "evidence_root": x.get("evidence_root") or snap.get("source_id"),
+            "is_translation": bool(x.get("is_translation")),
+            "translator": x.get("translator"),
+            "translation_of": None,
+        }
+
+    if not E.history_ok(rf):
+        items.append(
+            {
+                "code": "history_tampered",
+                "claim_id": None,
+                "blocking": True,
+                "detail": "research-review.json history is not intact",
+            }
+        )
     for c in (plan or {}).get("claims", []):
+        mine = [x for x in links if x["claim_id"] == c["id"]]
+        review = next((r for r in rf["reviews"] if r["claim_id"] == c["id"]), None)
+        outdated: list[str] = []
+        if review is not None:
+            basis = review.get("basis")
+            if not basis:
+                outdated = ["basis_missing"]
+            else:
+                if basis.get("claim") != E.claim_basis(c):
+                    outdated.append("claim")
+                was, now = basis.get("evidence") or {}, {x["id"]: E.link_basis(x) for x in mine}
+                outdated += [f"evidence.added:{k}" for k in now if k not in was]
+                outdated += [f"evidence.removed:{k}" for k in was if k not in now]
+                outdated += [f"evidence.changed:{k}" for k in now if k in was and was[k] != now[k]]
+        if outdated:
+            items.append(
+                {
+                    "code": "review_outdated",
+                    "claim_id": c["id"],
+                    "blocking": True,
+                    "detail": f"{c['id']}: the {review['status']} decision was made on a different "
+                    "claim or evidence; record a new decision",
+                    "refs": {"components": outdated, "outdated_status": review["status"]},
+                }
+            )
+        current = None if outdated else review
         claims.append(
             {
                 "id": c["id"],
                 "kind": c["kind"],
                 "assertion": c["assertion"],
-                "contested": False,
-                "flags": [],
-                "status": "unverified",
-                "suggested_status": "unverified",
-                "scenes": [c["anchors"][0]["scene_id"]],
-                "supports": [],
-                "contradicts": [],
-                "context": [],
-                "independent_roots": 0,
+                "contested": bool(c.get("contested")),
+                "flags": list(c.get("flags") or []),
+                "status": current["status"] if current else "unverified",
+                "suggested_status": "supported_pending_review"
+                if any(x["role"] == "supports" for x in mine)
+                else "unverified",
+                "scenes": sorted({a["scene_id"] for a in c.get("anchors", [])}),
+                "supports": [ref(x) for x in mine if x["role"] == "supports"],
+                "contradicts": [ref(x) for x in mine if x["role"] == "contradicts"],
+                "context": [ref(x) for x in mine if x["role"] in ("context", "mentions_only")],
+                "independent_roots": len(
+                    {x["snapshot_id"] for x in mine if x["role"] == "supports"}
+                ),
                 "quotation_basis": None,
-                "reviewer": None,
-                "rationale": None,
-                "counterargument_summary": None,
-                "review_outdated": [],
-                "outdated_review": None,
+                "reviewer": current["reviewer"] if current else None,
+                "rationale": current["rationale"] if current else None,
+                "counterargument_summary": current.get("counterargument_summary")
+                if current
+                else None,
+                "review_outdated": outdated,
+                "outdated_review": {
+                    "status": review["status"],
+                    "reviewer": review.get("reviewer"),
+                    "reviewed_at": review.get("reviewed_at"),
+                }
+                if outdated
+                else None,
             }
         )
-        items.append(
-            {
-                "code": "no_sources",
-                "claim_id": c["id"],
-                "blocking": True,
-                "detail": f"{c['id']}: no sources collected or linked",
-            }
-        )
+        if not mine:
+            items.append(
+                {
+                    "code": "no_sources",
+                    "claim_id": c["id"],
+                    "blocking": True,
+                    "detail": f"{c['id']}: no sources collected or linked",
+                }
+            )
     if plan:
-        items.append(
-            {
-                "code": "completeness_missing",
-                "claim_id": None,
-                "blocking": True,
-                "detail": "no completeness attestation",
-            }
-        )
+        comp = rf.get("completeness")
+        if comp is None:
+            items.append(
+                {
+                    "code": "completeness_missing",
+                    "claim_id": None,
+                    "blocking": True,
+                    "detail": "no completeness attestation",
+                }
+            )
+        elif comp.get("inventory_fingerprint") != E.inventory(plan):
+            items.append(
+                {
+                    "code": "completeness_stale",
+                    "claim_id": None,
+                    "blocking": True,
+                    "detail": "the completeness attestation is for a different claim inventory",
+                }
+            )
+    items += E.lineage_items(root)
     report = {
         "schema_version": "m5-report-0.1",
         "generated_at": "1970-01-01T00:00:00Z",
@@ -201,7 +282,29 @@ def plan(root: Path, o: dict) -> int:
                 }
             )
     _write(root, "research-plan.json", {"schema_version": "m5-research-plan-0.1", "claims": claims})
-    for rel, empty in (("evidence.json", {"links": []}), ("research-review.json", {"reviews": []})):
+    legacy = os.environ.get("FAKE_MODE") == "legacy_review"
+    review = (
+        {
+            "schema_version": "m5-review-0.1",
+            "reviews": [
+                {
+                    "claim_id": claims[0]["id"],
+                    "status": "disputed",
+                    "reviewer": "Trần Thị B",
+                    "rationale": "Recorded before the review policy changed.",
+                }
+            ],
+        }
+        if legacy and claims
+        else {
+            "schema_version": "m5-review-0.2",
+            "reviews": [],
+            "source_rechecks": [],
+            "history": [],
+            "primary_source_attestations": [],
+        }
+    )
+    for rel, empty in (("evidence.json", {"links": []}), ("research-review.json", review)):
         if not (root / rel).is_file():
             _write(root, rel, empty)
     print(
@@ -418,4 +521,14 @@ def main(cmd: str, root: Path, o: dict, argv: list[str]) -> int:
         return collect(root, o, hosts, mode)
     if cmd == "research-add-url":
         return add_url(root, o, hosts, mode)
+    import fake_research_edit as E
+
+    if cmd == "research-edit":
+        return E.research_edit(root, o, mode)
+    if cmd == "research-add-document":
+        return E.add_document(root, o)
+    if cmd == "narration-attest":
+        return E.narration_attest(root, o, argv)
+    if cmd == "narration-provenance-init":
+        return E.provenance_init(root, o)
     return _error("invalid_input", 2, f"unknown command {cmd}")

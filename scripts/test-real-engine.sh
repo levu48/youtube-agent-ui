@@ -46,7 +46,7 @@ s = root if root.tag == "testsuite" else root.find("testsuite")
 tests, skipped = int(s.get("tests")), int(s.get("skipped"))
 bad = int(s.get("failures")) + int(s.get("errors"))
 print(f"integration: {tests} tests, {skipped} skipped, {bad} failed/errored")
-if tests < 6 or skipped or bad:
+if tests < 7 or skipped or bad:
     sys.exit("error: real-engine integration tests did not all run and pass")
 PY
 

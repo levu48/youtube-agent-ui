@@ -25,8 +25,13 @@ CAPABILITIES = [
     "research-plan",
     "research-collect",
     "research-add-url",
+    "research-edit",
+    "research-add-document",
+    "narration-attest",
+    "narration-provenance-init",
 ]
-MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit patch
+MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit/research-edit patch
+MAX_DOCUMENT_BYTES = 400_000 * 4  # the engine reads at most 400k characters of UTF-8
 _STATUS_TTL = 20.0
 
 
@@ -148,6 +153,41 @@ class EngineService:
         args = commands.research_collect_args(root, dry_run=True, **params)
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout)
+
+    async def research_edit(
+        self, root: Path, patch: dict[str, Any], *, expect_revision: str, dry_run: bool = False
+    ) -> EngineResult:
+        """``research-edit --json`` with the patch on stdin (engine D-119). The engine checks
+        the revision, applies every operation and publishes atomically, or writes nothing."""
+        args = commands.research_edit_args(root, expect_revision=expect_revision, dry_run=dry_run)
+        data = json.dumps(patch, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(data) > MAX_PATCH_BYTES:
+            raise commands.ArgumentError(f"the edit is larger than {MAX_PATCH_BYTES} bytes")
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout, stdin=data)
+
+    async def add_document(
+        self, root: Path, text: str, *, expect_revision: str, **fields: Any
+    ) -> EngineResult:
+        """``research-add-document --json`` with the plain text on stdin (engine D-120)."""
+        args = commands.research_add_document_args(root, expect_revision=expect_revision, **fields)
+        data = text.encode("utf-8")
+        if len(data) > MAX_DOCUMENT_BYTES:
+            raise commands.ArgumentError("the document is too large")
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout, stdin=data)
+
+    async def narration_attest(self, root: Path, **kw: Any) -> EngineResult:
+        async with self._sem:
+            return await self.cli.run(
+                commands.narration_attest_args(root, **kw), timeout=self.read_timeout
+            )
+
+    async def provenance_init(self, root: Path, *, expect_revision: str) -> EngineResult:
+        """Offline regeneration may take longer than a read: allow it twice the read time."""
+        args = commands.narration_provenance_init_args(root, expect_revision=expect_revision)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout * 2)
 
 
 class EngineReadError(RuntimeError):

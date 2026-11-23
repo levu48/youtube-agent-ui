@@ -106,6 +106,20 @@ def _views(outline: dict, script: dict) -> tuple[str, str]:
     return "\n".join(o), "\n".join(sc)
 
 
+def _lineage(root: Path, *, edited: bool) -> None:
+    """Narration lineage (engine D-120): a fixture draft's sentences are ``fixture``; a new
+    sentence from an edit is ``fixture_derived`` unless it equals fixture text."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    import fake_research_edit as E
+
+    rec = json.loads((root / E.LINEAGE).read_text("utf-8")) if (root / E.LINEAGE).is_file() else {}
+    fixture = {s["norm"] for s in rec.get("segments", []) if s["origin"] == "fixture"}
+    E.write_lineage(
+        root,
+        lambda _sec, t: "fixture" if not edited or E._norm(t) in fixture else "fixture_derived",
+    )
+
+
 def _draft_edit(root: Path, o: dict, mode: str) -> int:
     if mode == "edit_slow":
         time.sleep(30)
@@ -166,6 +180,7 @@ def _draft_edit(root: Path, o: dict, mode: str) -> int:
     if changed and not dry:
         for n in changed:
             (root / n).write_bytes(out_bytes[n])
+        _lineage(root, edited=True)
     status = "already_current" if not changed else ("would_publish" if dry else "published")
     check = _check(root)
     report = {
@@ -310,6 +325,7 @@ def main() -> int:
         # Publish the real engine's fixture-provider output (captured from youtube-agent).
         for name in DRAFT_FILES:
             shutil.copyfile(FIXTURES / "draft" / name, root / name)
+        _lineage(root, edited=False)
         print("draft published", flush=True)
         return 0
     if cmd == "production-status":
@@ -380,7 +396,7 @@ def main() -> int:
         return 0
     if cmd == "draft-edit" and os.environ.get("FAKE_REVISION") == "1":
         return _draft_edit(root, o, mode)
-    if cmd.startswith("research-"):
+    if cmd.startswith(("research-", "narration-")):
         import fake_research  # the fake's research commands (engine D-118)
 
         return fake_research.main(cmd, root, o, argv)

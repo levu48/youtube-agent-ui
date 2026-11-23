@@ -440,3 +440,184 @@ def test_research_workspace_with_real_engine(settings):
         )
         assert out.returncode == 14, out.stderr
         assert json.loads(out.stdout)["revision"] == view["revision"]
+
+
+def test_research_review_with_real_engine(settings):
+    """M3 UI-B on the real engine (D-119/D-120, offline): narration lineage (fixture segments
+    with their text, a refused and an accepted attestation), an imported document, evidence
+    after a dry run, a decision that goes outdated and is confirmed again, history,
+    completeness, a primary attestation, and the same revision from the CLI."""
+    api = "/api/v1/projects/hcm-demo"
+    with Client(create_app(settings)) as c:
+        assert c.post("/api/v1/projects", json=PROJECT).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+
+        # Lineage: every fixture sentence is listed with its text (matched by SHA-256).
+        nar = c.get(f"{api}/draft/narration").json()
+        segs = nar["lineage"]["segments"]
+        assert nar["lineage"]["fixture_project"] is True and segs, nar
+        assert {s["origin"] for s in segs} == {"fixture"} and all(s["text"] for s in segs)
+        assert any(i["code"] == "fixture_narration" for i in nar["items"])
+        r = c.post(
+            f"{api}/draft/narration/attest",
+            json={
+                "expected_revision": nar["revision"],
+                "reviewer": "Trần Thị B",
+                "statement": "Tôi đã viết lại câu này bằng lời của chính tôi.",
+                "segment_ids": [segs[0]["segment_id"]],
+            },
+        )
+        assert r.status_code == 422 and r.json()["error"]["code"] == "lineage_refused", r.text
+
+        # Rewrite one section's narration; the new sentences are fixture_derived until attested.
+        d = c.get(f"{api}/draft/editable").json()
+        sec = d["script"]["data"]["sections"][0]["outline_section_id"]
+        rewritten = "Mùa thu năm ấy, quảng trường rợp cờ hoa khi buổi lễ bắt đầu."
+        r = c.post(
+            f"{api}/draft/edit",
+            json={
+                "expected_revision": d["editing"]["revision"],
+                "script": {"sections": [{"outline_section_id": sec, "narration": rewritten}]},
+            },
+        )
+        assert r.status_code == 200, r.text
+        nar = c.get(f"{api}/draft/narration").json()
+        derived = [s for s in nar["lineage"]["segments"] if s["origin"] == "fixture_derived"]
+        assert [s["text"] for s in derived] == [rewritten], nar["lineage"]["segments"]
+        out = c.post(
+            f"{api}/draft/narration/attest",
+            json={
+                "expected_revision": nar["revision"],
+                "reviewer": "Trần Thị B",
+                "statement": "Tôi viết lại toàn bộ câu mở đầu của phần này.",
+                "segment_ids": [derived[0]["segment_id"]],
+            },
+        )
+        assert out.status_code == 200, out.text
+        assert out.json()["result"]["status"] == "attested"
+        seg = next(
+            s
+            for s in out.json()["narration"]["lineage"]["segments"]
+            if s["segment_id"] == derived[0]["segment_id"]
+        )
+        assert seg["origin"] == "human"
+
+        # G1, then the claim inventory.
+        draft = c.get(f"{api}/draft").json()
+        r = c.post(
+            f"{api}/draft/approve",
+            json={
+                "reviewer": "Nguyễn Văn A",
+                "confirm": True,
+                "review_token": draft["review_token"],
+            },
+        )
+        assert r.status_code == 200, r.text
+        rev = c.get(f"{api}/research").json()["revision"]
+        jid = c.post(f"{api}/research/plan", json={"expected_revision": rev}).json()["job_id"]
+        wait_for(lambda: c.get(f"/api/v1/jobs/{jid}").json()["status"] == "succeeded", timeout=90)
+        view = c.get(f"{api}/research").json()
+        assert view["editing"]["supported"] and view["plan"]["claims"], view["editing"]
+        claim = view["plan"]["claims"][0]
+        cid = claim["id"]
+        assert claim["anchors"][0]["context"]["excerpt"] == claim["anchors"][0]["excerpt"]
+
+        # An imported document (offline), then evidence located by a dry run.
+        text = (
+            "Ngày 2 tháng 9 năm 1945, tại Quảng trường Ba Đình ở Hà Nội, Chủ tịch Hồ Chí Minh "
+            "đọc bản Tuyên ngôn Độc lập, khai sinh nước Việt Nam Dân chủ Cộng hòa."
+        )
+        r = c.post(
+            f"{api}/research/documents",
+            json={
+                "expected_revision": view["revision"],
+                "title": "Tuyên ngôn Độc lập (trích)",
+                "language": "vi",
+                "citation": "Hồ Chí Minh, Toàn tập, tập 4, NXB Chính trị quốc gia, 2011, tr. 1",
+                "imported_by": "Trần Thị B",
+                "text": text,
+            },
+        )
+        assert r.status_code == 200, r.text
+        doc = r.json()["result"]
+        snap = next(s for s in r.json()["research"]["snapshots"] if s["id"] == doc["snapshot_id"])
+        assert snap["acquisition"] == "imported" and snap["document_provenance"]["imported_by"]
+
+        def edit(*ops, dry_run=False):
+            body = {
+                "expected_revision": c.get(f"{api}/research").json()["revision"],
+                "operations": list(ops),
+                "dry_run": dry_run,
+            }
+            return c.post(f"{api}/research/edit", json=body)
+
+        link = {
+            "op": "evidence.add",
+            "claim_id": cid,
+            "snapshot_id": doc["snapshot_id"],
+            "quote": "Quảng trường Ba Đình",
+            "role": "supports",
+            "explanation": "Văn bản nêu địa điểm của sự kiện.",
+        }
+        dry = edit(link, dry_run=True)
+        assert dry.status_code == 200, dry.text
+        assert dry.json()["result"]["status"] == "would_publish"
+        assert dry.json()["result"]["occurrences"][0]["occurrences"][0]["n"] == 1
+        r = edit(link)
+        assert r.status_code == 200, r.text
+        ev = next(x for x in r.json()["research"]["evidence"] if x["claim_id"] == cid)
+        assert ev["id"].startswith("ev-") and ev["quote"] == "Quảng trường Ba Đình"
+
+        # A decision; a changed claim makes it outdated; confirming again records history.
+        decide = {
+            "op": "reviews.set",
+            "claim_id": cid,
+            "status": "insufficient",
+            "reviewer": "Trần Thị B",
+            "rationale": "Chỉ có một nguồn được nhập, chưa đủ để xác minh.",
+        }
+        r = edit(decide)
+        assert r.status_code == 200, r.text
+        claims = {x["id"]: x for x in r.json()["research"]["report"]["claims"]}
+        assert claims[cid]["status"] == "insufficient"
+        r = edit({"op": "claims.update", "id": cid, "flags": [*claim["flags"], "named_subject"]})
+        assert r.status_code == 200, r.text
+        claims = {x["id"]: x for x in r.json()["research"]["report"]["claims"]}
+        assert "claim" in claims[cid]["review_outdated"] and claims[cid]["status"] == "unverified"
+        assert edit(decide).status_code == 200
+        page = c.get(f"{api}/research/history", params={"kind": "claim_review"}).json()
+        assert page["chain_ok"] is True and page["entries"][0]["action"] == "replaced", page
+
+        # Refusals carry the engine's operation code.
+        r = edit({**decide, "reviewer": "reviewer"})
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_edit", r.text
+        assert r.json()["error"]["details"]["errors"][0]["code"] == "invalid_reviewer"
+
+        # Completeness and a primary attestation.
+        r = edit(
+            {
+                "op": "completeness.set",
+                "reviewer": "Trần Thị B",
+                "statement": "Mọi câu có nội dung sự kiện đều đã có claim tương ứng.",
+            }
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["research"]["review"]["completeness"]["reviewer"] == "Trần Thị B"
+        r = edit(
+            {
+                "op": "documents.attest_primary",
+                "snapshot_id": doc["snapshot_id"],
+                "reviewer": "Trần Thị B",
+                "statement": "Đây là bản in của văn kiện gốc.",
+            }
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["research"]["review"]["primary_source_attestations"]
+
+        # The CLI sees the same research revision.
+        root = settings.projects_root_real / "hcm-demo"
+        cli = _cli("research-check", f"--project-root={root}", "--json")
+        assert json.loads(cli.stdout)["revision"] == c.get(f"{api}/research").json()["revision"]

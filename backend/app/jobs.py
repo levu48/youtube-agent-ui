@@ -198,7 +198,7 @@ class JobManager:
             raise ApiError(
                 409,
                 "job_conflict",
-                "A draft job is queued or running for this project. Wait for it to finish.",
+                "A job is queued or running for this project. Wait for it to finish.",
                 {"job_id": active.id},
             )
         self._reserved.add(project_id)
