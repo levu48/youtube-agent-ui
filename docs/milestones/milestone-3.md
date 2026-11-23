@@ -1,6 +1,6 @@
 # Milestone 3 — Research Workspace: Claims, Sources, Evidence Review and G2 Approval
 
-**Status:** specification. Three separate engine PRs (E1, E2, E3) are prerequisites. All three are merged: E1 (engine PR #12, D-118, `8b1a766`), E2 (PR #13, D-119, `de1e876`) and E3 (PR #14, D-120, `fb6bffc`). UI-A (the workspace and collection jobs) is merged (UI PR #7, `3b6eb8f`); UI-B (review, evidence, decisions, documents, attestations) is merged (UI PR #8, `1fb1e45`); UI-C (G2, apply, export, the required G2 success test) is in review. Verification: [m3-verification.md](../m3-verification.md).
+**Status:** complete (2026-11-23). Three separate engine PRs (E1, E2, E3) were prerequisites. All three are merged: E1 (engine PR #12, D-118, `8b1a766`), E2 (PR #13, D-119, `de1e876`) and E3 (PR #14, D-120, `fb6bffc`). UI-A (the workspace and collection jobs) is merged (UI PR #7, `3b6eb8f`); UI-B (review, evidence, decisions, documents, attestations) is merged (UI PR #8, `1fb1e45`); UI-C (G2, apply, export, the required G2 success test) is merged (UI PR #9, `958aeb1`); the manual live smoke test is recorded (UI PR #10, `3f03878`). Verification: [m3-verification.md](../m3-verification.md).
 
 **Goal:** a reviewer can research every factual statement of an approved draft in the browser, approve the research (G2) and apply it, with the `youtube-agent` engine as the only authority. This covers:
 - the claim inventory and its classification;
@@ -618,7 +618,7 @@ UI-0 (this spec) ─► E1 engine: research CLI contract ─► E2 engine: resea
 | E3 | engine | E2 | `research-add-document` (`doc-` sources, schemas `m5-research-0.2`/`m5-snapshots-0.2`, excluded from network paths) with provenance and `acquisition`, `narration-provenance-init`, replacement ancestry, primary-source attestation and revocation, narration lineage, `narration-attest`, fail-closed provenance, provenance in the revision and the G2 binding. **Merged: engine PR #14, `fb6bffc`.** | engine pytest |
 | UI-A | UI | E1 | research reads, the snapshot reader, plan jobs, the **engine fetch-plan preview with expected revision and an explicit confirmed-host allowlist** for collect and add-URL, Research navigation. **Merged: UI PR #7, `3b6eb8f`; pins `ENGINE_REF` `fb6bffc`.** | backend, frontend, E2E, real-engine script, CI |
 | UI-B | UI | E1, E2, E3 | the upgrade banner and Confirm again, recheck grouping, provenance init, claim edits, evidence with occurrences, translations, decisions, the history read contract and view, completeness, recheck add/update/remove, the document-import API and form, primary-source attestation, the narration attestation panel, conflict and recovery. **Merged: UI PR #8, `1fb1e45`.** | same |
-| UI-C | UI | UI-B | the validation tab, G2 approval, apply, export, G1 re-approval; the required real-engine G2 success test with the genuinely sourced document. **In review (branch `feat/m3-g2-apply-export`).** | same, plus the manual live smoke test |
+| UI-C | UI | UI-B | the validation tab, G2 approval, apply, export, G1 re-approval; the required real-engine G2 success test with the genuinely sourced document. **Merged: UI PR #9, `958aeb1`; manual live smoke test recorded in UI PR #10, `3f03878`.** | same, plus the manual live smoke test |
 
 ## Non-goals
 - Visual selection (M4), narration audio, rendering, publishing.
@@ -629,20 +629,28 @@ UI-0 (this spec) ─► E1 engine: research CLI contract ─► E2 engine: resea
 - Force or replace flags, and `resume`.
 
 ## Definition of done
-- [ ] E1, E2 and E3 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum.
-- [ ] The browser performs every research action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
-- [ ] Network requests go only to hosts the reviewer confirmed for that specific action, from an engine fetch-plan preview at the same revision. The engine enforces this with `--allow-host` on every request and redirect. With `YTA_RESEARCH_NETWORK=false` there are none.
-- [ ] Every mutation, including collect and add-url after their network phase, is checked against the revision the reviewer loaded. Conflicts never overwrite.
-- [ ] A changed assertion, kind, flag, anchor, evidence link, translation or cited snapshot makes the affected review outdated. No claim is ever marked verified automatically or carried over. History is append-only, hash-chained and retained for the life of the project.
-- [ ] Completeness goes stale when the narration or the claim inventory changes.
-- [ ] Imported documents are labelled, with immutable provenance per edition (including corrected editions created with `--new-version-of`). Cited provenance is bound by G2. They never count as independent roots, and count as primary only with a per-edition attestation.
-- [ ] Fixture restrictions are cleared only by lineage, including replacement ancestry and tombstones, plus a reviewer attestation. They survive scene restructuring, fail closed when provenance is missing or corrupt, and are bound by the research revision and G2. Legacy fixture projects need an explicit, fail-closed provenance initialisation.
-- [ ] Legacy `m5-review-0.1` files are upgraded only explicitly; every decision is preserved and is outdated until confirmed again.
-- [ ] Offline documents are `doc-` sources without a URL, excluded from every network path. Source rechecks are unambiguous per (source, cited snapshot, current snapshot).
-- [ ] Research validation shows the engine's items with actionable links. G2 is approved only through `research-approve --expect-revision` and never appears current when stale. Apply makes G1 out of date, and the UI leads to re-approval; export works after apply.
-- [ ] The required real-engine test completes a successful G2 approval offline with a genuinely sourced, attributed document. M1 and M2 flows still pass, and CI and the real-engine script pass.
-- [ ] Vietnamese claims, passages, documents and translations work end to end.
-- [ ] Each PR is reviewed, with no automatic merge.
+- [x] E1, E2 and E3 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum.
+- [x] The browser performs every research action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
+- [x] Network requests go only to hosts the reviewer confirmed for that specific action, from an engine fetch-plan preview at the same revision. The engine enforces this with `--allow-host` on every request and redirect. With `YTA_RESEARCH_NETWORK=false` there are none.
+- [x] Every mutation, including collect and add-url after their network phase, is checked against the revision the reviewer loaded. Conflicts never overwrite.
+- [x] A changed assertion, kind, flag, anchor, evidence link, translation or cited snapshot makes the affected review outdated. No claim is ever marked verified automatically or carried over. History is append-only, hash-chained and retained for the life of the project.
+- [x] Completeness goes stale when the narration or the claim inventory changes.
+- [x] Imported documents are labelled, with immutable provenance per edition (including corrected editions created with `--new-version-of`). Cited provenance is bound by G2. They never count as independent roots, and count as primary only with a per-edition attestation.
+- [x] Fixture restrictions are cleared only by lineage, including replacement ancestry and tombstones, plus a reviewer attestation. They survive scene restructuring, fail closed when provenance is missing or corrupt, and are bound by the research revision and G2. Legacy fixture projects need an explicit, fail-closed provenance initialisation.
+- [x] Legacy `m5-review-0.1` files are upgraded only explicitly; every decision is preserved and is outdated until confirmed again.
+- [x] Offline documents are `doc-` sources without a URL, excluded from every network path. Source rechecks are unambiguous per (source, cited snapshot, current snapshot).
+- [x] Research validation shows the engine's items with actionable links. G2 is approved only through `research-approve --expect-revision` and never appears current when stale. Apply makes G1 out of date, and the UI leads to re-approval; export works after apply.
+- [x] The required real-engine test completes a successful G2 approval offline with a genuinely sourced, attributed document. M1 and M2 flows still pass, and CI and the real-engine script pass.
+- [x] Vietnamese claims, passages, documents and translations work end to end.
+- [x] Each PR is reviewed, with no automatic merge.
+
+All items are verified (2026-11-23) by the tests and records in [m3-verification.md](../m3-verification.md):
+- the engine facts at `fb6bffc` in [engine-compatibility.md](../engine-compatibility.md), which is the pinned `ENGINE_REF`;
+- the backend unit tests, Vitest and Playwright, on both the fake and the real engine;
+- the required real-engine G2 success test, offline, with the 1945 *Tuyên ngôn Độc lập* and the 1776 US Declaration (`backend/tests/fixtures/research/SOURCE.md`);
+- the manual live Wikipedia and Ollama smoke test.
+
+CI passed on `main` for the merged UI-C code (`958aeb1`). One pull-request run of the same code failed in the UI-B review E2E test: waiting on a cancelled toast animation raised `AbortError`. That is a flaky wait in the test, not a product failure, and the same test passed on `main` and in the local real-engine runs. Each PR was reviewed and merged only at the owner's request; PR #9 and the docs PR #10 were merged before their CI finished, at the owner's request.
 
 ## Claude Code handoff
 - **Read first:** `CLAUDE.md`, `docs/architecture.md`, `docs/engine-compatibility.md` (the M3 section), `docs/api-contract.md`, `docs/ui-design.md` and this file.
