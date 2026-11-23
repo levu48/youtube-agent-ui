@@ -32,6 +32,8 @@ const backendEnv = {
   YTA_PROJECTS_ROOT: join(tmp, "projects"),
   YTA_DATA_DIR: join(tmp, "data"),
   YTA_ALLOW_FIXTURE_PROVIDER: "true",
+  // Research: offline test pages (.fixture.invalid) instead of Wikipedia.
+  YTA_RESEARCH_SEARCH_PROVIDER: "fixture",
   YTA_OLLAMA_BASE_URL: "http://127.0.0.1:9",
   YTA_UI_ORIGINS: JSON.stringify([`http://127.0.0.1:${FRONTEND_PORT}`, `http://localhost:${FRONTEND_PORT}`]),
 };

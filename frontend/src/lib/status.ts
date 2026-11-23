@@ -185,3 +185,58 @@ export function nextAction(
     engineHint: hint,
   };
 }
+
+/** A claim's recorded status (research-check). "Verified" is only ever a person's decision. */
+export const CLAIM_STATUS: Record<string, Presentation> = {
+  unverified: { label: "Unverified", tone: "neutral", icon: CircleDashed },
+  supported_pending_review: { label: "Evidence linked, needs a decision", tone: "info", icon: CircleDot },
+  verified: { label: "Verified by a reviewer", tone: "success", icon: CheckCircle2 },
+  disputed: { label: "Disputed", tone: "warning", icon: AlertTriangle },
+  insufficient: { label: "Insufficient evidence", tone: "danger", icon: XCircle },
+  editorial_nonfactual: { label: "Editorial (not a factual claim)", tone: "neutral", icon: CircleDashed },
+};
+
+export function claimPresentation(status: string): Presentation {
+  return CLAIM_STATUS[status] ?? { label: humanize(status), tone: "neutral", icon: CircleDashed };
+}
+
+/** G2, as research-check reports it. */
+export const RESEARCH_APPROVAL: Record<string, Presentation> = {
+  approved: { label: "G2 approved", tone: "success", icon: CheckCircle2 },
+  stale: { label: "G2 approval out of date", tone: "warning", icon: AlertTriangle },
+  not_approved: { label: "G2 not approved", tone: "neutral", icon: CircleDashed },
+};
+
+/** Fetch outcomes recorded by the engine, in words. */
+export const FETCH_OUTCOME: Record<string, string> = {
+  fetched: "Fetched",
+  queued: "Queued",
+  host_not_allowed: "Host not confirmed: not contacted",
+  robots_disallowed: "Not allowed by the site's robots.txt",
+  metadata_only: "Metadata only (for example a PDF): not extracted",
+  timeout: "Timed out",
+  http_401: "Access refused (401)",
+  http_403: "Access refused (403)",
+  http_404: "Not found (404)",
+  http_429: "Rate limited (429)",
+  http_5xx: "Server error",
+  too_large: "Too large",
+  url_refused: "URL refused (not a public https address)",
+  ssrf_blocked: "Refused: not a public address",
+  skipped_time_budget: "Skipped: time budget reached",
+};
+
+export function fetchOutcome(outcome: string | null | undefined): string {
+  if (!outcome) return "Not fetched yet";
+  return FETCH_OUTCOME[outcome] ?? humanize(outcome);
+}
+
+/** A URL as a reader sees it: the engine stores percent-encoded URLs, so Vietnamese paths
+ * are decoded for display (text only; never used as a link target). */
+export function displayUrl(url: string): string {
+  try {
+    return decodeURI(url);
+  } catch {
+    return url;
+  }
+}

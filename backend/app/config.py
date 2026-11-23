@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # The offline fixture provider writes placeholder text. It is for tests and demos only,
     # so it is hidden unless explicitly enabled.
     allow_fixture_provider: bool = False
+    # Research (M3): network actions (Wikipedia search, fetching a page) only ever run when a
+    # reviewer starts one and confirms the exact hosts; false turns them all off.
+    research_network: bool = True
+    # The search provider research uses. "fixture" (offline test pages) is only accepted
+    # together with allow_fixture_provider, for tests and demos.
+    research_search_provider: str = "wikipedia"
     read_timeout_seconds: float = 60.0
     cancel_grace_seconds: float = 10.0
 

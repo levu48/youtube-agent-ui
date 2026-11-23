@@ -23,7 +23,7 @@ EXIT_CODES: dict[int, tuple[str, str]] = {
     12: ("approval_missing", "Approval missing or stale"),
     13: ("engine_error_13", "Engine error (code 13)"),
     14: ("research_not_ready", "Research not ready"),
-    15: ("engine_error_15", "Engine error (code 15)"),
+    15: ("partial_search_failure", "Some searches failed (the rest was saved)"),
     16: ("human_gate", "Stopped at a human review gate"),
     130: ("interrupted", "Interrupted"),
 }

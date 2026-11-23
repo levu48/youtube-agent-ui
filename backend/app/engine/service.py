@@ -21,6 +21,10 @@ CAPABILITIES = [
     "draft-check",
     "draft-approve",
     "draft-edit",
+    "research-check",
+    "research-plan",
+    "research-collect",
+    "research-add-url",
 ]
 MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit patch
 _STATUS_TTL = 20.0
@@ -124,6 +128,26 @@ class EngineService:
             raise commands.ArgumentError(f"the edit is larger than {MAX_PATCH_BYTES} bytes")
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout, stdin=data)
+
+    # ------------------------------------------------------------------ research (M3)
+
+    async def research_check(self, root: Path) -> dict[str, Any]:
+        """The engine's research report plus its revision (D-118). Exit 14 (not approvable)
+        still prints the report."""
+        data = await self._json(commands.research_check_args(root), ok_codes=(0, 14))
+        if not isinstance(data, dict) or not isinstance(data.get("revision"), str):
+            raise EngineReadError(
+                "engine_unsupported",
+                "This engine does not report a research revision: it predates the research "
+                "CLI contract (engine D-118). Update youtube-agent to the pinned ENGINE_REF.",
+            )
+        return data
+
+    async def collect_preview(self, root: Path, **params: Any) -> EngineResult:
+        """``research-collect --dry-run``: the fetch plan, contacting nothing."""
+        args = commands.research_collect_args(root, dry_run=True, **params)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout)
 
 
 class EngineReadError(RuntimeError):

@@ -227,9 +227,34 @@ Editing needs an engine with `draft-edit` (D-117, the pinned `ENGINE_REF` `573eb
 
 **Approval and editing.** Any saved edit makes an existing approval `stale`, by the engine's rule. With this engine, approval sends the engine `revision` as `--expect-revision`, so the engine itself refuses to approve a version other than the one validated. The browser does not offer approval while edits are unsaved, and the server checks the revision.
 
+## Milestone 3, UI-A: research reads and collection jobs (implemented)
+
+Implemented in UI-A against engine `fb6bffc` (only E1 is used). These rows replace the matching proposed rows below; everything else in the proposed table (history, documents, edits, attestations, apply) is still proposed for UI-B and UI-C.
+
+| Method and path | Engine command | Body | Response and errors |
+|---|---|---|---|
+| `GET /projects/{id}/research` | `research-check --json` (exit 0 or 14), plus reads of `research.json`, `render/research/snapshots.json` and `evidence.json` | none | `report` (or `report_error {code, message}`), `revision`, `started` (`research-plan.json` exists), `sources`, `snapshots`, `evidence`, `records_error`, `stage`, `network {enabled, search_provider}`, `active_job_id` |
+| `GET /projects/{id}/research/snapshots/{snapshot_id}` | read only | none | `{snapshot, text}`. `404 not_found`; `409 snapshot_tampered` when the record or path is invalid, the file is missing or not regular, or its SHA-256 or UTF-8 check fails |
+| `POST /projects/{id}/research/plan` | `research-plan --claim-provider=none --expect-revision=R --json` | `expected_revision` | `202` job `research-plan` |
+| `POST /projects/{id}/research/collect/preview` | `research-collect --dry-run … --expect-revision=R --json` | `expected_revision`, `languages` (`vi`/`en`, default both), `claim_ids`, `max_queries` (≤50, default 8), `max_results_per_query` (≤20, default 5), `max_pages` (≤100, default 15) | the engine's preview `{revision, search_hosts, provider_result_hosts, known_targets, hosts, plan_sha256}`. Nothing is contacted |
+| `POST /projects/{id}/research/collect` | `research-collect --search-provider=… --allow-host=H … --expect-revision=R --json` | as preview, plus `network: true`, `plan_sha256`, `allow_hosts` | `202` job `research-collect`. The backend runs the preview again first: a different `plan_sha256` or host set is `422 network_not_confirmed` with `details.preview`; an empty host list is `422 nothing_to_collect` |
+| `POST /projects/{id}/research/sources` | `research-add-url --url=U [--claim=…] --fetch=queue\|live [--allow-host=H] --expect-revision=R --json` | `expected_revision`, `url` (https, no credentials, ≤2000), `claim_ids`, `fetch` (`queue` default, or `live`), and for live `network: true` and `allow_hosts: [host of url]` | `202` job `research-add-url`. Live without exactly that host is `422 network_not_confirmed` with `details.host` |
+
+Common rules:
+- Mutations need CSRF and origin, and are refused while the project has an active job (`409 job_conflict`).
+- `YTA_RESEARCH_NETWORK=false` refuses collect and live add-URL with `403 network_disabled`. Queueing a URL still works.
+- With the offline fixture search provider (`YTA_RESEARCH_SEARCH_PROVIDER=fixture`, honoured only with `YTA_ALLOW_FIXTURE_PROVIDER=true`), live add-URL runs `--fetch=fixture`, so nothing leaves the machine.
+- Hosts are DNS names only: IP literals, single-label names, credentials and non-https URLs are rejected before the engine runs.
+- Engine refusals are mapped once, in the job (or, for the preview, directly):
+  - `revision_mismatch` → `409 revision_conflict` with `details.current_revision`;
+  - `g1_not_current` → `409 g1_not_current`;
+  - `invalid_input` → `422 research_refused`;
+  - `unresolved_publication` → `409 unresolved_publication`.
+- Job success messages come from the job type ("Claim inventory prepared", "Source collection finished", "Source added"). The engine's own JSON and progress lines are shown as logs; there is no progress percentage.
+
 ## Milestone 3 (proposed): research and G2
 
-**Status: proposed, not implemented.** The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
+**Status: proposed.** UI-A implemented the rows above. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
 
 | Method and path | Engine command | Body (main fields) | Response |
 |---|---|---|---|

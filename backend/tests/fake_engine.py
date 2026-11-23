@@ -380,6 +380,10 @@ def main() -> int:
         return 0
     if cmd == "draft-edit" and os.environ.get("FAKE_REVISION") == "1":
         return _draft_edit(root, o, mode)
+    if cmd.startswith("research-"):
+        import fake_research  # the fake's research commands (engine D-118)
+
+        return fake_research.main(cmd, root, o, argv)
     print(f"error: unknown command {cmd}", file=sys.stderr)
     return 2
 

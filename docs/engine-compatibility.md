@@ -189,7 +189,20 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 7. **Progress.** Collect is silent. **E1:** a stderr line per search and fetch.
 8. **Read contract.** **E1** documents `snapshots.json` and `pages/<sha256>.txt` as stable reads with hash verification.
 
-**E1 status.** Merged: engine PR #12 (D-118), merge commit `8b1a766`. `ENGINE_REF` stays at `573ebdd` until UI-A, the first UI PR that uses E1, bumps it. Each UI PR pins the engine merge it needs.
+**Engine status.** All three additions are merged: E1 is engine PR #12 (D-118, `8b1a766`), E2 is PR #13 (D-119, `de1e876`), and E3 is PR #14 (D-120, `fb6bffc`). UI-A pins `ENGINE_REF` to `fb6bffc9b087bbf1782690ade9dc5e050d3d2c99`, the E3 merge, so that UI-B can build on the same engine. UI-A itself uses only E1.
+
+### Verified at `fb6bffc` (UI-A, 2026-11-22)
+
+These facts were checked against the CLI and by the real-engine integration test `test_research_workspace_with_real_engine`.
+
+- **`research-check --json`** prints the report plus `revision`, with no `ok` field. It exits 0 when the research is approvable and 14 when it is not; the report is printed either way. An engine without `revision` predates D-118, and the UI reports `engine_unsupported`.
+- **`research-plan --claim-provider=none --expect-revision=R --json`** prints `{"ok": true, "status", "claims", "uncovered", "leads", "revision"}`. It needs a current G1: otherwise the report has the blocking item `editorial_not_current`.
+- **`research-collect --dry-run --json`** contacts nothing and prints `{revision, search_hosts, provider_result_hosts, known_targets, hosts, plan_sha256}`. `hosts` is the permission scope: every host the run may contact. URLs queued with `research-add-url --fetch=queue` appear in `known_targets` and in `hosts`.
+- **`research-collect` live** needs one `--allow-host=H` per host; without one it exits 2 before contacting anything. Every request and redirect, including `robots.txt`, is checked against the list, and refusals are recorded as `host_not_allowed`. It writes one progress line per search and fetch to stderr (for example `search vi …`). Exit 15 is `partial_search_failure`: some searches failed and the rest was saved.
+- **`research-add-url --fetch=queue|live`**: live needs `--allow-host` equal to the URL's host. With the fixture search provider, the UI passes `--fetch=fixture` instead, which serves the engine's `.fixture.invalid` pages offline.
+- **Errors** under `--json` are `{"ok": false, "error": {"code", "message", ...}}`. The UI maps `revision_mismatch` (exit 9, with `current_revision`) to `409 revision_conflict`; it also handles `invalid_input`, `concurrency`, `g1_not_current`, `provider_unavailable` and `partial_search_failure`.
+- **Reads.** `research.json` (sources), `render/research/snapshots.json` and `render/research/pages/<sha256>.txt`, and `evidence.json` are read only. Snapshot text is served only when its SHA-256 matches the record.
+- **CLI interoperability.** After UI jobs, the CLI's `research-check` reports the same revision as the UI.
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 

@@ -49,6 +49,14 @@ EVENT_PAGE = 1000
 _ACTIVE = ("queued", "running")
 
 
+SUCCESS_MESSAGES = {
+    "draft": "Draft generation finished",
+    "research-plan": "Claim inventory prepared",
+    "research-collect": "Source collection finished",
+    "research-add-url": "Source added",
+}
+
+
 @dataclass
 class Event:
     id: int
@@ -422,7 +430,8 @@ class JobManager:
         cls = classify(rc)
         engine_msg = engine_error_line("\n".join(stderr_tail))
         if rc == 0:
-            status, message, err, code = "succeeded", "Draft generation finished", None, None
+            message = SUCCESS_MESSAGES.get(row["job_type"], "Finished")
+            status, err, code = "succeeded", None, None
         elif cancel_requested:
             status, message, err, code = "cancelled", "Cancelled by user", None, "cancelled"
         elif cls.expected_gate:

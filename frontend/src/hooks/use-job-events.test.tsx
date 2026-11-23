@@ -223,6 +223,8 @@ describe("JobCard completion refresh", () => {
     expect(keys().filter((k) => k === JSON.stringify(["project", "hcm-demo"]))).toHaveLength(1);
     expect(keys()).toContain(JSON.stringify(["jobs"]));
     expect(keys()).toContain(JSON.stringify(["projects"]));
+    // Named explicitly, so a research page reloads the engine's report after any job.
+    expect(keys()).toContain(JSON.stringify(["project", "hcm-demo", "research"]));
     expect(screen.queryByText(/^Draft job succeeded\.$/)).toBeNull();
   });
 

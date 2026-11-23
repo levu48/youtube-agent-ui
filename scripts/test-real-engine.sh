@@ -46,7 +46,7 @@ s = root if root.tag == "testsuite" else root.find("testsuite")
 tests, skipped = int(s.get("tests")), int(s.get("skipped"))
 bad = int(s.get("failures")) + int(s.get("errors"))
 print(f"integration: {tests} tests, {skipped} skipped, {bad} failed/errored")
-if tests < 5 or skipped or bad:
+if tests < 6 or skipped or bad:
     sys.exit("error: real-engine integration tests did not all run and pass")
 PY
 
@@ -71,7 +71,7 @@ for s in report["suites"]:
     walk(s)
 print(f"e2e: {stats['expected']} passed, {len(skipped)} skipped, {stats['unexpected']} failed")
 allowed = [t for t in skipped if t.startswith("cancel a running job")]
-if stats["unexpected"] or stats["expected"] < 14 or len(skipped) != len(allowed):
+if stats["unexpected"] or stats["expected"] < 15 or len(skipped) != len(allowed):
     sys.exit(f"error: real-engine E2E did not run as required (skipped: {skipped})")
 PY
 echo "==> Real-engine tests passed against youtube-agent @ $REF"
