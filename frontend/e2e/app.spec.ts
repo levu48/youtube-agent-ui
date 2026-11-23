@@ -1,4 +1,4 @@
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import AxeBuilder from "@axe-core/playwright";
@@ -275,6 +275,7 @@ test("edit outline and Vietnamese script, validate, approve; a later edit makes 
   await save.click();
   const dialog = page.getByRole("dialog", { name: "The draft changed since you loaded it" });
   await expect(dialog.getByLabel("Your unsaved edits")).toHaveValue(/Tiêu đề xung đột/);
+  await settled(dialog); // not a half-faded frame (a flaky contrast result in CI)
   await axe(page);
   await dialog.getByRole("button", { name: "Keep editing" }).click();
   await expect(page.getByLabel(/^Title/)).toHaveValue("Tiêu đề xung đột");
@@ -502,6 +503,159 @@ test("research review: import a document, link evidence, decide, outdated and co
   const fixture = page.getByRole("region", { name: "Fixture text" });
   await expect(fixture).toContainText("fixture_narration");
   await expect(fixture.getByText("Fixture text").first()).toBeVisible();
+  await axe(page);
+});
+
+// The G2 journey shared with the backend's real-engine test: human-written narration whose
+// every claim is supported by a public-domain document (backend/tests/fixtures/research).
+const RESEARCH_FIXTURES = join(__dirname, "../../backend/tests/fixtures/research");
+type Journey = {
+  project: { slug: string; idea: string; language: string; duration_seconds: number };
+  narration: Record<string, string>;
+  reviewer: string;
+  approver: string;
+  attestation: string;
+  documents: Record<"vi" | "en", Record<string, string>>;
+  evidence: { claim_prefix: string; quote: string; explanation: string }[];
+  quotation: Record<string, string> & { claim_prefixes: string[] };
+  rationale: string;
+  completeness: string;
+};
+const G2: Journey = JSON.parse(readFileSync(join(RESEARCH_FIXTURES, "g2-journey.json"), "utf-8"));
+
+/** The API as the page calls it (same origin, CSRF token), for preparing state quickly. */
+async function backend(page: Page) {
+  await page.goto("/");
+  const token = (await (await page.request.get("/api/v1/session")).json()).csrf_token as string;
+  const origin = new URL(page.url()).origin;
+  const call = async (method: "GET" | "POST", path: string, data?: unknown) => {
+    const r = await page.request.fetch(`/api/v1${path}`, {
+      method,
+      data,
+      headers: method === "POST" ? { "X-CSRF-Token": token, Origin: origin } : {},
+    });
+    expect(r.ok(), `${method} ${path}: ${await r.text()}`).toBe(true);
+    return r.json();
+  };
+  const job = async (path: string, data: unknown) => {
+    const { job_id } = await call("POST", path, data);
+    await expect.poll(async () => (await call("GET", `/jobs/${job_id}`)).status, { timeout: 90_000 }).toBe("succeeded");
+  };
+  return { get: (path: string) => call("GET", path), post: (path: string, data: unknown) => call("POST", path, data), job };
+}
+
+test("G2: validate, approve the validated revision, apply, approve G1 again, export", async ({ page }) => {
+  test.setTimeout(240_000);
+  const api = await backend(page);
+  const p = `/projects/${G2.project.slug}`;
+  const rev = async () => (await api.get(`${p}/research`)).revision as string;
+  const g1 = async () => {
+    const { review_token } = await api.get(`${p}/draft`);
+    await api.post(`${p}/draft/approve`, { reviewer: G2.approver, confirm: true, review_token });
+  };
+
+  // Prepared through the API (the UI-B journeys cover these screens): a rewritten, attested
+  // narration, G1, the claim inventory, both documents, evidence, decisions, completeness.
+  await api.post("/projects", G2.project);
+  await api.job(`${p}/draft-jobs`, { provider: "fixture" });
+  const editable = await api.get(`${p}/draft/editable`);
+  await api.post(`${p}/draft/edit`, {
+    expected_revision: editable.editing.revision,
+    script: { sections: Object.entries(G2.narration).map(([outline_section_id, narration]) => ({ outline_section_id, narration })) },
+  });
+  const nar = await api.get(`${p}/draft/narration`);
+  await api.post(`${p}/draft/narration/attest`, {
+    expected_revision: nar.revision,
+    reviewer: G2.reviewer,
+    statement: G2.attestation,
+    segment_ids: nar.lineage.segments.map((x: { segment_id: string }) => x.segment_id),
+  });
+  await g1();
+  await api.job(`${p}/research/plan`, { expected_revision: await rev() });
+  const snap: Record<string, string> = {};
+  for (const [k, d] of Object.entries(G2.documents)) {
+    const meta = Object.fromEntries(Object.entries(d).filter(([f]) => f !== "file" && f !== "primary_statement"));
+    const text = readFileSync(join(RESEARCH_FIXTURES, d.file), "utf-8");
+    const out = await api.post(`${p}/research/documents`, { expected_revision: await rev(), imported_by: G2.reviewer, text, ...meta });
+    snap[k] = out.result.snapshot_id;
+  }
+  const claims: { id: string; assertion: string }[] = (await api.get(`${p}/research`)).report.claims;
+  const ids = (prefix: string) => claims.filter((c) => c.assertion.startsWith(prefix)).map((c) => c.id);
+  const q = G2.quotation;
+  const ops: Record<string, unknown>[] = G2.evidence.flatMap((e) =>
+    ids(e.claim_prefix).map((claim_id) => ({
+      op: "evidence.add", claim_id, snapshot_id: snap.vi, quote: e.quote, role: "supports", explanation: e.explanation, source_type: "primary",
+    })),
+  );
+  for (const claim_id of q.claim_prefixes.flatMap(ids)) {
+    ops.push(
+      { op: "evidence.add", claim_id, snapshot_id: snap.en, quote: q.original, role: "supports", source_type: "primary", explanation: q.original_explanation },
+      {
+        op: "evidence.add", claim_id, snapshot_id: snap.vi, quote: q.translated, role: "supports", source_type: "primary", is_translation: true,
+        original_language: "en", explanation: q.translated_explanation,
+        translation_of: { snapshot_id: snap.en, quote: q.original_quote, language: "en", speaker: q.speaker, equivalence_note: q.equivalence_note },
+      },
+    );
+  }
+  for (const [k, d] of Object.entries(G2.documents)) {
+    ops.push({ op: "documents.attest_primary", snapshot_id: snap[k], reviewer: G2.reviewer, statement: d.primary_statement });
+  }
+  await api.post(`${p}/research/edit`, { expected_revision: await rev(), operations: ops });
+  await api.post(`${p}/research/edit`, {
+    expected_revision: await rev(),
+    operations: [
+      ...claims.map((c) => ({ op: "reviews.set", claim_id: c.id, status: "verified", reviewer: G2.reviewer, rationale: G2.rationale })),
+      { op: "completeness.set", reviewer: G2.reviewer, statement: G2.completeness },
+    ],
+  });
+
+  // In the browser: validate, then approve exactly what was validated.
+  await page.goto(`${p}/research`);
+  await page.getByRole("tab", { name: /^Validation/ }).click();
+  const g2 = page.getByRole("region", { name: /Research approval \(G2\)/ });
+  await expect(g2).toContainText("G2 not approved");
+  const approve = g2.getByRole("button", { name: /Approve research \(G2\)/ });
+  await expect(approve).toBeDisabled();
+  await g2.getByRole("button", { name: "Validate research" }).click();
+  await expect(g2).toContainText("the engine reports the research is approvable", { timeout: 30_000 });
+  await axe(page);
+  await approve.click();
+  const dialog = page.getByRole("dialog", { name: "Approve the research (G2)?" });
+  await expect(dialog).toContainText("not permission to publish");
+  await dialog.getByLabel(/^Reviewer/).fill(G2.approver);
+  await dialog.getByLabel(/I reviewed every claim/).check();
+  await settled(dialog);
+  await axe(page);
+  await dialog.getByRole("button", { name: "Approve research" }).click();
+  await expect(dialog).toBeHidden({ timeout: 30_000 });
+  await expect(g2).toContainText("Claim IDs not applied yet");
+  await expect(g2).toContainText("Approved, claim IDs not applied yet");
+
+  // Apply warns about G1 first, then leads to the G1 re-approval.
+  await g2.getByRole("button", { name: /Apply claim IDs to scenes/ }).click();
+  const applyDialog = page.getByRole("dialog", { name: "Apply claim IDs to the scenes?" });
+  await expect(applyDialog).toContainText("(G1) then goes out of date");
+  await settled(applyDialog);
+  await axe(page);
+  await applyDialog.getByRole("button", { name: "Apply claim IDs" }).click();
+  await expect(applyDialog).toBeHidden({ timeout: 30_000 });
+  await expect(g2).toContainText("Out of date after apply: approve the draft again");
+  await g2.getByRole("link", { name: "Approve the draft again" }).click();
+  await openTab(page, "Validation");
+  const g1Panel = page.getByRole("region", { name: "Editorial approval (G1)" });
+  await g1Panel.getByLabel(/Reviewer name/).fill(G2.approver);
+  await g1Panel.getByRole("button", { name: "Approve Editorial Draft (G1)" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Approve draft" }).click();
+  await expect(g1Panel.getByText("G1 approved")).toBeVisible({ timeout: 30_000 });
+
+  // Export after apply: the engine's written files, as relative paths.
+  await page.goto(`${p}/research`);
+  await page.getByRole("tab", { name: /^Validation/ }).click();
+  await expect(g2.getByText("G1 is out of date after apply")).toHaveCount(0);
+  await g2.getByRole("button", { name: "Export research records" }).click();
+  await expect(g2.getByText("output/sources.md")).toBeVisible({ timeout: 30_000 });
+  const toasts = page.getByRole("region", { name: /Notifications/ });
+  await toasts.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((x) => x.finished)));
   await axe(page);
 });
 

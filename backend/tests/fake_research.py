@@ -234,12 +234,17 @@ def check(root: Path) -> int:
                 }
             )
     items += E.lineage_items(root)
+    import fake_research_g2 as G
+
+    items += G.extra_items(root, claims)
+    approvable = bool(plan) and not any(i["blocking"] for i in items)
+    approval_status, applied = G.state(root)
     report = {
         "schema_version": "m5-report-0.1",
         "generated_at": "1970-01-01T00:00:00Z",
-        "approvable": False,
-        "approval_status": "not_approved",
-        "applied": False,
+        "approvable": approvable,
+        "approval_status": approval_status,
+        "applied": applied,
         "narration_fingerprint": None,
         "counts": {"claims": len(claims), "blocking_items": len(items)},
         "items": items,
@@ -248,7 +253,7 @@ def check(root: Path) -> int:
         "revision": revision(root),
     }
     print(json.dumps(report, ensure_ascii=False))
-    return 14
+    return 0 if approvable else 14
 
 
 def plan(root: Path, o: dict) -> int:
@@ -531,4 +536,12 @@ def main(cmd: str, root: Path, o: dict, argv: list[str]) -> int:
         return E.narration_attest(root, o, argv)
     if cmd == "narration-provenance-init":
         return E.provenance_init(root, o)
+    import fake_research_g2 as G
+
+    if cmd == "research-approve":
+        return G.approve(root, o, mode)
+    if cmd == "research-apply":
+        return G.apply(root, o)
+    if cmd == "research-export":
+        return G.export(root, o)
     return _error("invalid_input", 2, f"unknown command {cmd}")

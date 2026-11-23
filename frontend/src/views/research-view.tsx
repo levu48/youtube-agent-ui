@@ -14,6 +14,7 @@ import { AddUrlDialog } from "@/components/research/add-url-dialog";
 import { ClaimPanel } from "@/components/research/claim-panel";
 import { CollectDialog } from "@/components/research/collect-dialog";
 import { HistoryDisclosure } from "@/components/research/decision-panel";
+import { G2Panel } from "@/components/research/g2-panel";
 import { DocumentDialog } from "@/components/research/document-dialog";
 import { SnapshotReader } from "@/components/research/snapshot-reader";
 import { CompletenessPanel, RechecksPanel, UpgradeBanner } from "@/components/research/validation-panels";
@@ -530,6 +531,7 @@ function ValidationTab({ view, projectId, onClaim }: { view: View; projectId: st
   return (
     <div className="space-y-5">
       <h2 className="text-lg font-semibold">Validation (research-check)</h2>
+      <G2Panel projectId={projectId} view={view} disabled={view.active_job_id ? "A job is running for this project." : null} />
       {cov ? (
         <p className="text-sm">
           Coverage: {cov.covered} of {cov.sentences} narration sentences are covered by a claim.
@@ -558,9 +560,6 @@ function ValidationTab({ view, projectId, onClaim }: { view: View; projectId: st
         <p className="text-xs text-muted-foreground">Append-only: every replaced, cleared or removed record is kept, for the life of the project.</p>
         {view.review?.schema_version === "m5-review-0.2" ? <HistoryDisclosure projectId={projectId} label="Show the full history" /> : null}
       </section>
-      <p className="text-sm text-muted-foreground">
-        The research approval (G2), applying claim IDs to scenes and the export are not in this version yet: use the engine CLI for those.
-      </p>
     </div>
   );
 }

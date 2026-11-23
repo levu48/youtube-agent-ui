@@ -276,9 +276,28 @@ These endpoints are implemented in UI-B against engine `fb6bffc`. They replace t
 - `invalid_input` → `422 invalid_edit`.
 - Request validation → `422 validation_error`, before any engine run.
 
+## Milestone 3, UI-C: G2, apply and export (implemented)
+
+Implemented in UI-C against engine `fb6bffc`. Every write holds the project (`409 job_conflict` / `project_busy`), needs CSRF, and returns the refreshed research view.
+
+| Method and path | Engine command | Body | Response and errors |
+|---|---|---|---|
+| `GET /projects/{id}/research` | as in UI-B | none | UI-B's fields, plus `gates {g1, g2}`: the states production-status reports in its stage details (`G1 editorial: <state>`, `G2 research: <state>`), or `null` when it reports none |
+| `POST /projects/{id}/research/approve` | `research-approve --reviewer=… [--comment=…] --expect-revision=R --json` | `expected_revision` (the revision the reviewer validated), `reviewer`, optional `comment` (≤2000), `confirm: true` | `{result: {status: approved \| already_approved, revision, approval {reviewer, approved_at, comment, policy_version, meaning}}, research}` |
+| `POST /projects/{id}/research/apply` | `research-apply --expect-revision=R --json` | `expected_revision`, `confirm: true` | `{result: {status: published \| already_current, scenes_changed, written, revision}, research}`; afterwards `gates.g1` is `stale_after_apply` |
+| `POST /projects/{id}/research/export` | `research-export --expect-revision=R --json` (never `--replace-output`) | `expected_revision` | `{result: {written, unchanged, revision}, research}`, as paths relative to the project |
+
+**Error mapping:**
+- `revision_mismatch` → `409 revision_conflict`, with `details.current_revision`. Nothing is recorded.
+- `not_approvable` → `422 not_approvable`, with `details.items[{code, detail}]` (the engine's blocking items, at most 25). The engine also uses this code for "export before apply"; the message says which.
+- `approval_stale` / `g1_not_current` → `409`, with the engine's first line.
+- `human_edit_conflict` → `409`, with `details.paths` (the hand-edited export files). The message never suggests the replace flag.
+- `invalid_input` (for example a placeholder reviewer) → `422 invalid_edit`.
+- Request validation (no `confirm`, nulls, unknown fields) → `422 validation_error`, before any engine run.
+
 ## Milestone 3 (proposed): research and G2
 
-**Status: proposed.** UI-A and UI-B implemented the rows above; G2 approval, apply and export remain for UI-C. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
+**Status: proposed, now implemented.** UI-A, UI-B and UI-C implemented the rows above; this table is kept as the original proposal. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.
 
 | Method and path | Engine command | Body (main fields) | Response |
 |---|---|---|---|
