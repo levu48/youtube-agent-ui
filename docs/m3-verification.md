@@ -211,3 +211,62 @@
 ### Not covered (manual or later)
 - **Live Wikipedia:** a real search with `YTA_RESEARCH_SEARCH_PROVIDER=wikipedia`, using the network, is left for the manual M3 smoke test. Automated tests never use the network.
 - **UI-C:** validation as the gate, G2 approval, apply, export and G1 re-approval, plus the required real-engine G2 success test with a genuinely sourced document.
+
+## UI-C (2026-11-23)
+
+### What it adds
+- **Backend:**
+  - Allowlisted argv builders for `research-approve` (`--reviewer`, optional `--comment`), `research-apply` and `research-export`, each with `--expect-revision` and `--json`. Export never passes `--replace-output`.
+  - Endpoints: `POST /research/approve` (`confirm: true`), `POST /research/apply` (`confirm: true`) and `POST /research/export`. Each holds the project and returns the refreshed research view.
+  - The research view adds `gates {g1, g2}`: the states production-status reports in the stage details (`G1 editorial: …`, `G2 research: …`), parsed, never inferred.
+  - Error mapping: `not_approvable` → `422` with the engine's blocking items; `human_edit_conflict` → `409` with the edited paths, and the message never suggests the replace flag.
+- **Frontend:** the Validation tab's **Research approval (G2), apply and export** panel.
+  - **Validate research** runs the engine's check. **Approve research (G2)** is enabled only for the revision that was validated and reported approvable. If the research changes afterwards, the page asks to validate again.
+  - The approval dialog shows what the approval means and needs a reviewer and an explicit "I reviewed every claim…" tick. A refusal lists the engine's blocking items.
+  - An out-of-date approval is shown as out of date, never as approved.
+  - **Apply claim IDs to scenes** warns first that G1 goes out of date, then links to the G1 re-approval on the Draft page.
+  - **Export research records** after apply lists the written files; a hand-edited export is refused with the engine's reason.
+  - The project's next step after apply reads "Approve the draft again" (`stale_after_apply` was previously not recognised).
+- **The genuinely sourced documents** (`backend/tests/fixtures/research/`, see `SOURCE.md`):
+  - the 1945 *Tuyên ngôn Độc lập* as printed in *Cứu Quốc* no. 36, from Vietnamese Wikisource revision 85294 (public domain);
+  - the opening of the 1776 United States Declaration of Independence, engrossed copy, from English Wikisource revision 16143344 (public domain).
+
+  `g2-journey.json` holds the human-written narration, the evidence and the decisions, and is shared by the integration and E2E tests.
+- **Fake engine:** approve, apply and export, approvability, approval binding and `stale_after_apply`, and G1/G2 in production-status once research has started.
+- **Fixed along the way:** the outline-editing E2E test's axe scan now waits for the conflict dialog's animation, which caused the flaky contrast failure in PR #8's CI.
+- **Real-engine script:** it now requires at least 8 integration tests and 17 E2E passes.
+
+### Engine facts found while building it (fb6bffc)
+- **Export after apply needs no new G1.** After `research-apply`, production-status reports `G1 editorial: stale_after_apply` and `G2 research: approved`. `research-check` reports only a non-blocking `editorial_storyboard_changed` note, and `research-export` succeeds. G1 still needs approving again before later stages; the UI leads there.
+- **`not_approvable` has two meanings.** It is the code both for blocking items at approval (exit 14, one `  - [code] detail` line each) and for "export before apply". The UI shows the engine's message rather than assuming.
+- **A hand-edited export** (`output/sources.md` and so on) is `human_edit_conflict` (exit 2), whose message suggests `--replace-output`. The UI never offers that flag.
+- **Imported documents can carry a full G2.** A non-contested factual claim is verified with one real supporting passage. A quotation needs a primary passage, which for an imported document means an attested edition, or a translation traced to a primary original that is also linked to the claim.
+
+### Results
+| Check | Result |
+|---|---|
+| Backend `ruff check`, `ruff format --check` | clean |
+| Backend unit tests (fake engine) | 286 passed, including 19 UI-C tests |
+| Real-engine integration (`scripts/test-real-engine.sh`, engine `fb6bffc`) | 8 passed, 0 skipped |
+| Frontend lint, `tsc --noEmit` | clean |
+| Vitest | 112 passed, including 7 UI-C tests |
+| Playwright, fake engine | 18 passed |
+| Playwright, real engine | 17 passed, 1 allowed skip (slow-job cancel) |
+
+### Covered by tests
+- **Real-engine integration (`test_g2_success_with_a_genuinely_sourced_document`):** the required G2 success, offline, with no fixture evidence.
+  1. A fixture draft's four scenes are rewritten (`draft-edit`) and every rewritten sentence is attested (`narration-attest`).
+  2. G1, then the claim inventory (8 claims).
+  3. Both documents are imported with their provenance, and both editions are attested as primary sources.
+  4. Evidence for every claim, including the translated quotation traced to its English original.
+  5. Verified decisions and completeness; the engine reports the research approvable with no blocking item.
+  6. An approval with an earlier revision is refused (`revision_conflict`) and records nothing.
+  7. G2, apply (G1 `stale_after_apply`), G1 again, export (four files).
+  8. The CLI reports G2 approved and applied, `G1 editorial: approved` and `G2 research: approved`.
+  9. A hand-edited `output/sources.md` is never overwritten.
+- **Browser (fake and real engine):** the same journey, prepared through the API, then validate, approve the validated revision, apply with its warning, approve G1 again from the link, and export, with axe on the page and every dialog.
+- **Unit (backend):** the argv builders and their refusals; strict requests (`confirm`, no nulls); the whole journey on the fake engine, including `already_approved`, export before apply and `human_edit_conflict`; a stale revision and a change during approval; `not_approvable` items; G1 not current; a generic reviewer; G2 going stale after an edit, with apply refused; the project busy.
+- **Component (frontend):** approval only after validation and an explicit tick, with the validated revision; validate again after a change; an out-of-date approval never shown as approved; apply's G1 warning and the re-approval link; export and the hand-edit refusal; the engine's blocking items; the gate labels and the next step after apply.
+
+### Not covered (manual)
+- **Live Wikipedia and Ollama:** the M3 smoke test with a real search and a real model is recorded by hand, not in CI.

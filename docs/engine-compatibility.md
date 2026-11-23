@@ -230,6 +230,26 @@ These facts were checked against the CLI, the source and the real-engine integra
   - Refusals are `lineage_refused` with `details.reason` (`unchanged_fixture_text`, `still_close`, `not_fixture_derived`, `unknown_segment`, `already_initialized`, `not_fixture_project`, `narration_provenance_invalid`).
 - **History.** The engine chains entries by `sha256` of its own model dump (`ensure_ascii` JSON). The UI does not re-implement this: `chain_ok` is the absence of the engine's `history_tampered` item.
 
+### Verified at `fb6bffc` (UI-C, 2026-11-23)
+
+Checked against the CLI, the source (`agents/research.py`, `research/checks.py`, `production/gates.py`) and the real-engine integration test `test_g2_success_with_a_genuinely_sourced_document`. `fb6bffc` is still the engine's `main`, so `ENGINE_REF` is unchanged.
+
+- **`research-approve --project-root=P --reviewer=NAME [--comment=…] --expect-revision=R --json`** prints `{"ok": true, status: approved | already_approved, approval {schema_version m5-approval-0.1, reviewer, approved_at, comment, policy_version m5-research-3, bound, snapshot_hashes, claim_statuses, scene_claims, meaning}, revision}`.
+  - The revision is checked on the same locked snapshot that is approved. A file changing during the approval is a `concurrency` refusal (exit 9).
+  - A placeholder reviewer is `invalid_input` (exit 2), from the engine's `real_person` check.
+  - A non-current G1 is `g1_not_current` (exit 12).
+  - Blocking items are `not_approvable` (exit 14); the message has one `  - [code] detail` line per item, at most 25.
+- **`research-apply --expect-revision=R --json`** prints `{"ok": true, status: published | already_current, scenes_changed, written: ["storyboard.draft.json"], revision}`. Only the scenes' `claim_ids` change, so the research revision is unchanged. Without a current approval it is `approval_stale` (exit 12).
+- **`research-export --expect-revision=R --json`** prints `{"ok": true, written, unchanged, revision}`. The paths are `output/sources.md`, `render/research/citation-plan.json`, `render/research/research-report.json` and `render/research/research-report.md`.
+  - Before apply it is `not_approvable` (exit 14, "claim IDs are not applied to the scenes").
+  - A hand-edited output is `human_edit_conflict` (exit 2), unless `--replace-output` is passed, which the UI never does.
+- **After apply:**
+  - `production-status` reports the draft stage `needs_review` with `G1 editorial: stale_after_apply`, and the research stage `completed` with `G2 research: approved`.
+  - `draft-check` reports `approval_status: stale` and still passes, so `draft-approve` records G1 again.
+  - `research-check` adds only the non-blocking note `editorial_storyboard_changed`, and export already succeeds before the G1 re-approval.
+- **Before apply,** the research stage is `needs_review` with `G2 research: approved_not_applied`.
+- **A G2 from imported documents alone works.** A non-contested factual claim is verified with one real supporting passage; imported documents never count as independent roots, so a contested claim cannot rely on them. A quotation needs a supporting primary passage containing the quoted words or a translation traced to a primary original that is also linked to the claim; for an imported document "primary" needs an attestation of that edition.
+
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
 **Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.
