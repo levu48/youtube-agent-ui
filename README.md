@@ -4,7 +4,11 @@ Local-only web studio for the separate [`youtube-agent`](https://github.com/levu
 
 **Milestone 1 scope:** a dashboard, project creation, a project workspace (engine stages, next action, draft jobs, live logs, cancel), and a read-only draft viewer.
 
-**Milestone 2:** edit the outline and script in the browser, validate the draft, and record editorial approval (G1). Every save goes through the engine's `draft-edit`, and approval through `draft-approve`; the UI never writes a draft file. It needs `youtube-agent` at the pinned [`ENGINE_REF`](ENGINE_REF) (`573ebdd`, with D-117) or later (see [milestone-2.md](docs/milestones/milestone-2.md)). Research, visuals, narration, rendering and publishing are not included.
+**Milestone 2:** edit the outline and script in the browser, validate the draft, and record editorial approval (G1). Every save goes through the engine's `draft-edit`, and approval through `draft-approve`; the UI never writes a draft file. It needs `youtube-agent` at the pinned [`ENGINE_REF`](ENGINE_REF) (`573ebdd`, with D-117) or later (see [milestone-2.md](docs/milestones/milestone-2.md)).
+
+**Milestone 3:** research: claims, sources, evidence, review and G2 (see [milestone-3.md](docs/milestones/milestone-3.md)).
+
+**Milestone 4 (in progress), UI-A:** a read-only visuals workspace from the engine's `visuals-state` snapshot (G1, G3, apply states, applied-image facts, pending recovery), the visual plan as a job, an image search on Wikimedia Commons bound to the engine's preview and exact hosts, a gallery of candidate images served only by ID and verified hash, and importing your own image. Choosing images, rights clearances and apply come with UI-B, which needs engine V2 (see [milestone-4.md](docs/milestones/milestone-4.md)). Narration, rendering and publishing are not included.
 
 ```
 Browser ──► Next.js (127.0.0.1:3000) ──/api proxy──► FastAPI (127.0.0.1:8000) ──► uv run --no-sync ytagent …
@@ -38,6 +42,8 @@ Both servers bind to `127.0.0.1` only. Press Ctrl-C to stop both.
 | `YTA_ALLOW_FIXTURE_PROVIDER` | `false` | Shows the offline fixture provider, which writes placeholder text. For tests and demos only. |
 | `YTA_RESEARCH_NETWORK` | `true` | Allows research searches and live page fetches. Each one still needs you to confirm the exact hosts. `false` refuses them; queueing a URL still works. |
 | `YTA_RESEARCH_SEARCH_PROVIDER` | `wikipedia` | `fixture` uses the engine's offline test pages (`*.fixture.invalid`). Honoured only with `YTA_ALLOW_FIXTURE_PROVIDER=true`. |
+| `YTA_VISUALS_NETWORK` | `true` | Allows image searches on Wikimedia Commons. Each one still needs you to confirm the engine's exact preview and hosts. `false` refuses them; importing your own image still works. |
+| `YTA_VISUALS_SEARCH_PROVIDER` | `wikimedia` | `fixture` uses the engine's offline placeholder images (`*.fixture.invalid`). Honoured only with `YTA_ALLOW_FIXTURE_PROVIDER=true`. |
 
 Projects created in the UI are ordinary engine projects. You can keep using them from the CLI, and edits and approvals made in either place are the same engine records:
 

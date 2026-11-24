@@ -32,9 +32,14 @@ CAPABILITIES = [
     "research-approve",
     "research-apply",
     "research-export",
+    "visuals-state",
+    "visuals-plan",
+    "visuals-acquire",
+    "visuals-import",
 ]
 MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit/research-edit patch
 MAX_DOCUMENT_BYTES = 400_000 * 4  # the engine reads at most 400k characters of UTF-8
+MAX_IMAGE_BYTES = 20 * 1024 * 1024  # the engine's ImageLimits.max_bytes (visuals import)
 _STATUS_TTL = 20.0
 
 
@@ -207,6 +212,41 @@ class EngineService:
         args = commands.research_export_args(root, expect_revision=expect_revision)
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout)
+
+    # ------------------------------------------------------------------ visuals (M4)
+
+    async def visuals_state(self, root: Path) -> dict[str, Any]:
+        """``visuals-state --json``: the engine's one consistent read-only snapshot (D-122)."""
+        data = await self._json(commands.visuals_state_args(root))
+        if (
+            not isinstance(data, dict)
+            or data.get("scheme") != "m4-visuals-state-1"
+            or not isinstance(data.get("revision"), str)
+            or not isinstance(data.get("inputs"), dict)
+        ):
+            raise EngineReadError(
+                "engine_unsupported",
+                "This engine has no visuals-state snapshot: it predates the visuals CLI "
+                "contract (engine D-122). Update youtube-agent to the pinned ENGINE_REF.",
+            )
+        return data
+
+    async def acquire_preview(self, root: Path, **params: Any) -> EngineResult:
+        """``visuals-acquire --dry-run``: the canonical acquisition preview, contacting
+        nothing and writing nothing."""
+        args = commands.visuals_acquire_args(root, dry_run=True, **params)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout)
+
+    async def visuals_import(
+        self, root: Path, data: bytes, *, expect_revision: str, **fields: Any
+    ) -> EngineResult:
+        """``visuals-import --stdin``: the image bytes on stdin, never a path."""
+        args = commands.visuals_import_args(root, expect_revision=expect_revision, **fields)
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            raise commands.ArgumentError("the image is empty or larger than 20 MB")
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout * 2, stdin=data)
 
 
 class EngineReadError(RuntimeError):

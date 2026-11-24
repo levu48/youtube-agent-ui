@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # The search provider research uses. "fixture" (offline test pages) is only accepted
     # together with allow_fixture_provider, for tests and demos.
     research_search_provider: str = "wikipedia"
+    # Visuals (M4): Wikimedia Commons image search runs only after a reviewer confirms the
+    # engine's acquisition preview and its exact hosts; false turns every visuals network
+    # action off.
+    visuals_network: bool = True
+    # "wikimedia", or "fixture" (offline placeholder images) together with
+    # allow_fixture_provider, for tests and demos.
+    visuals_search_provider: str = "wikimedia"
     read_timeout_seconds: float = 60.0
     cancel_grace_seconds: float = 10.0
 

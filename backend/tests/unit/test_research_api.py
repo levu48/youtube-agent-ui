@@ -302,7 +302,7 @@ def test_a_stale_revision_is_refused(client, planned):
     job = _job(
         client, client.post(f"{API}/research/plan", json={"expected_revision": "0" * 64}), "failed"
     )
-    assert job["error_code"] == "engine_conflict"
+    assert job["error_code"] == "revision_mismatch"
 
 
 def test_a_change_during_the_network_phase_records_nothing(client, planned, fake_cli):
@@ -321,7 +321,7 @@ def test_a_change_during_the_network_phase_records_nothing(client, planned, fake
         ),
         "failed",
     )
-    assert job["error_code"] == "engine_conflict"
+    assert job["error_code"] == "revision_mismatch"
     assert client.get(f"{API}/research").json()["sources"] == []
 
 

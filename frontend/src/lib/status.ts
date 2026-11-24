@@ -270,3 +270,68 @@ export function displayUrl(url: string): string {
     return url;
   }
 }
+
+// ---------------------------------------------------------------------- visuals (M4)
+
+/** G3 as `visuals-state` reports it (the engine's `gates.visuals()`); never derived here. */
+export const G3_STATUS: Record<string, Presentation> = {
+  ready: { label: "G3 ready", tone: "success", icon: CheckCircle2 },
+  needs_review: { label: "G3 needs review", tone: "warning", icon: UserCheck },
+  pending: { label: "G3 not started", tone: "neutral", icon: CircleDashed },
+  blocked: { label: "G3 blocked", tone: "warning", icon: Lock },
+};
+
+export function g3Presentation(status: string | null | undefined): Presentation {
+  if (!status) return { label: "G3 not reported by the engine", tone: "neutral", icon: CircleDashed };
+  return G3_STATUS[status] ?? { label: `G3 ${humanize(status)}`, tone: "neutral", icon: CircleDashed };
+}
+
+/** A scene's engine-reported `apply_state`, in fixed words per value. */
+export const APPLY_STATE: Record<string, Presentation> = {
+  none: { label: "No images yet", tone: "neutral", icon: CircleDashed },
+  existing_shots: { label: "Keeps its current images", tone: "neutral", icon: CircleDot },
+  selected_not_applied: { label: "Selected, not applied", tone: "info", icon: CircleDot },
+  applied_current: { label: "Applied and current", tone: "success", icon: CheckCircle2 },
+  changed_since_apply: { label: "Changed since the last apply", tone: "warning", icon: AlertTriangle },
+  draft_edited: { label: "Images edited by hand in the draft", tone: "warning", icon: AlertTriangle },
+};
+
+export function applyStatePresentation(state: string): Presentation {
+  return APPLY_STATE[state] ?? { label: humanize(state), tone: "neutral", icon: CircleDashed };
+}
+
+/** A candidate's rights evidence status (the engine's), never "publishable". */
+export const RIGHTS_STATUS: Record<string, Presentation> = {
+  accepted: { label: "Licence evidence complete", tone: "success", icon: CheckCircle2 },
+  manual_review: { label: "Needs a human rights review", tone: "warning", icon: UserCheck },
+  rejected: { label: "Rights rejected", tone: "danger", icon: XCircle },
+  not_applicable: { label: "Rights not applicable", tone: "neutral", icon: CircleDashed },
+};
+
+export function rightsPresentation(status: string | null | undefined): Presentation {
+  if (!status) return { label: "No rights evidence", tone: "neutral", icon: CircleDashed };
+  return RIGHTS_STATUS[status] ?? { label: humanize(status), tone: "neutral", icon: CircleDashed };
+}
+
+/** Why an applied asset's rights are not current (`rights_reason`). */
+export const RIGHTS_REASON: Record<string, string> = {
+  not_verified: "Applied without verified rights (test and mock images always are)",
+  clearance_revoked: "Its rights clearance was revoked",
+  clearance_invalid: "Its rights clearance no longer matches the image or its evidence",
+  rights_changed: "The candidate's rights evidence changed after apply",
+  candidate_missing: "No catalogue candidate has this image any more",
+  candidate_ambiguous: "Applied before candidate tracking; several candidates have these bytes",
+};
+
+export const BINDING_LABEL: Record<string, string> = {
+  recorded: "recorded at apply",
+  inferred: "inferred (applied before candidate tracking; one candidate has these bytes)",
+  ambiguous: "ambiguous: several candidates have these bytes, and the engine picks none",
+  missing: "no candidate found",
+};
+
+export const IMAGE_INTEGRITY: Record<string, string> = {
+  ok: "Image intact",
+  missing: "Image file missing",
+  mismatch: "Image file modified (bytes do not match)",
+};

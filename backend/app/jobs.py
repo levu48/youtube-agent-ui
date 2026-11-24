@@ -54,6 +54,24 @@ SUCCESS_MESSAGES = {
     "research-plan": "Claim inventory prepared",
     "research-collect": "Source collection finished",
     "research-add-url": "Source added",
+    "visuals-plan": "Visual plan written",
+    "visuals-acquire": "Image search finished",
+}
+
+# A failed engine command that answered with the ``--json`` error envelope: its code is more
+# precise than the exit code (exit 9 covers a revision change as well as a busy project).
+ENGINE_JSON_ERRORS = {
+    "revision_mismatch": "The project changed since you loaded it (another action, the CLI or "
+    "a job). Nothing was recorded. Reload, then try again.",
+    "preview_mismatch": "What this search would contact changed since you confirmed it. "
+    "Nothing was contacted. Check again and confirm the new list.",
+    "recovery_required": "An interrupted engine publication must be recovered in the CLI "
+    "first. Nothing was done.",
+    "partial_acquire_failure": "Some image requests failed; the scenes that completed were "
+    "recorded.",
+    "g1_not_current": "The draft approval (G1) is not current. Approve the draft again first.",
+    "catalog_untrusted": "The candidate catalogue was changed outside the engine, so nothing "
+    "in it is trusted until a search rebuilds it.",
 }
 
 
@@ -407,9 +425,10 @@ class JobManager:
 
         counter = {"n": 0, "truncated": False}
         stderr_tail: list[str] = []
+        stdout_tail: list[str] = []
         with open(log_path, "a", encoding="utf-8") as logf:
             pumps = asyncio.gather(
-                self._pump(job_id, proc.stdout, "stdout", logf, counter, None),
+                self._pump(job_id, proc.stdout, "stdout", logf, counter, stdout_tail),
                 self._pump(job_id, proc.stderr, "stderr", logf, counter, stderr_tail),
             )
             rc = await wait_exit(proc)
@@ -444,6 +463,9 @@ class JobManager:
             err, code = engine_msg, "interrupted"
         else:
             status, message, err, code = "failed", cls.summary, engine_msg, cls.code
+            jcode = _json_error_code(stdout_tail)
+            if jcode in ENGINE_JSON_ERRORS:
+                message, code = ENGINE_JSON_ERRORS[jcode], jcode
         self._finish(job_id, status, rc, message, err, code)
 
     async def _pump(self, job_id, stream, name, logf, counter, tail) -> None:
@@ -460,7 +482,7 @@ class JobManager:
             logf.flush()
             if tail is not None:
                 tail.append(text)
-                del tail[:-50]
+                del tail[: -(400 if name == "stdout" else 50)]
             counter["n"] += 1
             if counter["n"] <= MAX_LOG_EVENTS:
                 self._emit(
@@ -502,6 +524,21 @@ class JobManager:
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+def _json_error_code(lines: list[str]) -> str | None:
+    """The ``error.code`` of the engine's ``--json`` error envelope at the end of stdout."""
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].startswith("{"):
+            continue
+        try:
+            doc = json.loads("\n".join(lines[i:]))
+        except ValueError:
+            continue
+        err = doc.get("error") if isinstance(doc, dict) and doc.get("ok") is False else None
+        code = err.get("code") if isinstance(err, dict) else None
+        return code if isinstance(code, str) else None
+    return None
 
 
 def _job_out(row) -> JobOut:

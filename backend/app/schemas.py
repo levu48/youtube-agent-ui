@@ -220,6 +220,7 @@ class SystemConfig(BaseModel):
     default_model: str
     providers: list[str]
     research_network: bool = True
+    visuals_network: bool = True
 
 
 # ---------------------------------------------------------------------- research (M3)
@@ -267,6 +268,79 @@ class AddSourceRequest(_Strict):
     allow_hosts: Annotated[
         list[Annotated[str, Field(min_length=1, max_length=253)]], Field(max_length=1)
     ] = []
+
+
+# ---------------------------------------------------------------------- visuals (M4)
+
+SCENE_ID = commands.SCENE_ID_RE.pattern
+
+
+class VisualsPlanRequest(_Strict):
+    expected_revision: str = Field(pattern=HEX64)
+
+
+class AcquirePreviewRequest(_Strict):
+    """What an image search would do; the engine computes the preview (no network)."""
+
+    expected_revision: str = Field(pattern=HEX64)
+    scene_ids: Annotated[list[Annotated[str, Field(pattern=SCENE_ID)]], Field(max_length=500)] = []
+    max_candidates_per_scene: int = Field(default=4, ge=1, le=20)
+
+
+class AcquireRequest(AcquirePreviewRequest):
+    """Run the search the reviewer confirmed: ``preview_sha256`` and ``allow_hosts`` must be
+    exactly those of the engine's current preview for the same parameters. The engine checks
+    both again itself (``--expect-preview``)."""
+
+    network: Literal[True]
+    preview_sha256: str = Field(pattern=HEX64)
+    allow_hosts: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=253)]],
+        Field(min_length=1, max_length=50),
+    ]
+
+
+_ONE_LINE = re.compile(r"^[^\x00-\x1f\x7f]*$")
+
+
+class VisualsImportFields(_Strict):
+    """The text fields of an image import (sent before the file part)."""
+
+    expected_revision: str = Field(pattern=HEX64)
+    scene_id: str = Field(pattern=SCENE_ID)
+    kind: Literal["archival", "document", "chart", "generated"]
+    provenance: str = Field(min_length=10, max_length=2000)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    source_url: str | None = Field(default=None, max_length=2000)
+    creator: str | None = Field(default=None, min_length=1, max_length=300)
+    license_name: str | None = Field(default=None, min_length=1, max_length=200)
+    license_url: str | None = Field(default=None, max_length=2000)
+    attribution: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_is_none(cls, v: object) -> object:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator(
+        "provenance", "title", "source_url", "creator", "license_name", "license_url",
+        "attribution",
+    )  # fmt: skip
+    @classmethod
+    def _single_line(cls, v: str | None) -> str | None:
+        if v is not None and not _ONE_LINE.fullmatch(v):
+            raise ValueError("must be one line without control characters")
+        return v
+
+    @field_validator("source_url", "license_url")
+    @classmethod
+    def _https(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                commands.url_host(v)
+            except commands.ArgumentError as exc:
+                raise ValueError(str(exc)) from None
+        return v
 
 
 class JobCreated(BaseModel):

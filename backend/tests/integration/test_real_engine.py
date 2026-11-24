@@ -798,3 +798,128 @@ def test_g2_success_with_a_genuinely_sourced_document(settings):
         assert r.status_code == 409 and r.json()["error"]["code"] == "human_edit_conflict", r.text
         assert r.json()["error"]["details"]["paths"] == ["output/sources.md"]
         assert (root / "output/sources.md").read_text("utf-8").endswith("Ghi chú tay.\n")
+
+
+def test_visuals_workspace_with_real_engine(settings):
+    """M4 UI-A on the real engine (D-122, fixture search provider, offline): the read-only
+    snapshot, the plan job, the engine's acquisition preview, a confirmed search bound to it,
+    verified candidate images, an import through stdin, the backend's recovery refusal from
+    the engine's own ``recovery_required``, and the same revision from the CLI."""
+    from tests.fake_visuals import png
+
+    settings.visuals_search_provider = "fixture"
+    api = "/api/v1/projects/hcm-demo"
+    root = settings.projects_root_real / "hcm-demo"
+    with Client(create_app(settings)) as c:
+        assert c.post("/api/v1/projects", json=PROJECT).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+        draft = c.get(f"{api}/draft").json()
+        r = c.post(
+            f"{api}/draft/approve",
+            json={
+                "reviewer": "Nguyễn Văn A",
+                "confirm": True,
+                "review_token": draft["review_token"],
+            },
+        )
+        assert r.status_code == 200, r.text
+
+        def job(resp) -> dict:
+            assert resp.status_code == 202, resp.text
+            jid = resp.json()["job_id"]
+            return wait_for(
+                lambda: (
+                    (j := c.get(f"/api/v1/jobs/{jid}").json())["status"] in ("succeeded", "failed")
+                    and j
+                ),
+                timeout=120,
+            )
+
+        view = c.get(f"{api}/visuals").json()
+        assert view["scheme"] == "m4-visuals-state-1" and view["plan"] is None, view
+        assert view["gates"]["g1"]["status"] == "approved"
+        assert view["recovery_required"] is False and view["narration"]
+        done = job(c.post(f"{api}/visuals/plan", json={"expected_revision": view["revision"]}))
+        assert done["status"] == "succeeded", done
+        view = c.get(f"{api}/visuals").json()
+        assert view["plan"]["scenes"] and view["gates"]["g3"]["status"] == "needs_review"
+
+        rev = view["revision"]
+        p = c.post(f"{api}/visuals/acquire/preview", json={"expected_revision": rev}).json()
+        assert p["preview"]["hosts"] == ["commons.fixture.invalid", "upload.fixture.invalid"], p
+        assert p["preview"]["revision"] == rev and p["preview"]["image_provider"] == "none"
+        wrong = c.post(
+            f"{api}/visuals/acquire",
+            json={"expected_revision": rev, "network": True, "preview_sha256": "0" * 64,
+                  "allow_hosts": p["preview"]["hosts"]},
+        )  # fmt: skip
+        assert wrong.status_code == 409 and wrong.json()["error"]["code"] == "preview_mismatch"
+        done = job(
+            c.post(
+                f"{api}/visuals/acquire",
+                json={"expected_revision": rev, "network": True,
+                      "preview_sha256": p["preview_sha256"], "allow_hosts": p["preview"]["hosts"]},
+            )
+        )  # fmt: skip
+        assert done["status"] == "succeeded", done
+        view = c.get(f"{api}/visuals").json()
+        assert view["catalog_trusted"] is True
+        cands = [x for items in view["candidates"].values() for x in items]
+        assert cands and all(x["placeholder"] for x in cands if x["source_type"] == "commons")
+        cand = next(x for x in cands if x.get("local_path"))
+        img = c.get(f"{api}/visuals/candidates/{cand['id']}/image?sha256={cand['sha256']}")
+        assert img.status_code == 200, img.text
+        assert img.headers["content-type"] in ("image/jpeg", "image/png")
+        assert img.headers["cache-control"] == "private, max-age=31536000, immutable"
+        old = c.get(f"{api}/visuals/candidates/{cand['id']}/image?sha256={'0' * 64}")
+        assert old.status_code == 409 and old.json()["error"]["code"] == "image_changed"
+        stale = c.post(f"{api}/visuals/acquire/preview", json={"expected_revision": rev})
+        assert stale.status_code == 409 and stale.json()["error"]["code"] == "revision_conflict"
+
+        # Import through stdin: the engine re-encodes it and records a manual_review candidate.
+        r = c.post(
+            f"{api}/visuals/import",
+            data={"expected_revision": view["revision"], "scene_id": "scene-005",
+                  "kind": "chart", "provenance": "A chart I drew myself for this project.",
+                  "creator": "Nguyễn Văn A"},
+            files={"file": ("chart.png", png(640, 360, (30, 90, 160)), "image/png")},
+        )  # fmt: skip
+        assert r.status_code == 200, r.text
+        res = r.json()["result"]
+        assert res["rights_status"] == "manual_review" and res["scene_id"] == "scene-005"
+        imp = next(
+            x
+            for x in r.json()["visuals"]["candidates"]["scene-005"]
+            if x["id"] == res["candidate_id"]
+        )
+        served = c.get(f"{api}/visuals/candidates/{imp['id']}/image?sha256={imp['sha256']}")
+        assert served.status_code == 200, served.text
+        bad = c.post(
+            f"{api}/visuals/import",
+            data={"expected_revision": r.json()["visuals"]["revision"], "scene_id": "scene-005",
+                  "kind": "chart", "provenance": "A chart I drew myself for this project."},
+            files={"file": ("x.png", b"\x89PNG\r\n\x1a\nnot really", "image/png")},
+        )  # fmt: skip
+        assert bad.status_code == 422 and bad.json()["error"]["code"] == "visuals_refused", bad.text
+
+        # The CLI sees the same visuals state and revision.
+        out = _cli("visuals-state", f"--project-root={root}", "--json")
+        assert out.returncode == 0, out.stderr
+        view = c.get(f"{api}/visuals").json()
+        assert json.loads(out.stdout)["revision"] == view["revision"]
+
+        # An interrupted draft/visuals publication (as a crash leaves it): the engine reports
+        # recovery_required and the backend refuses every write before any engine command.
+        man = root / "render/llm/manifest.json"
+        doc = json.loads(man.read_text("utf-8"))
+        doc["pending"] = {"run_id": "crash-test", "state": "prepared", "files": {}}
+        man.write_text(json.dumps(doc), "utf-8")
+        view = c.get(f"{api}/visuals").json()
+        assert view["recovery_required"] is True
+        assert view["pending_journals"][0]["code"] == "recovery_required"
+        r = c.post(f"{api}/visuals/acquire/preview", json={"expected_revision": view["revision"]})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "recovery_required"
+        assert r.json()["error"]["details"]["checked_by"] == "backend"

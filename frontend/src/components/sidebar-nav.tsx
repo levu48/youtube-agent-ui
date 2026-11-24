@@ -4,6 +4,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 const RESEARCH_PATH = /^\/projects\/([^/]+)\/research\/?$/;
+const VISUALS_PATH = /^\/projects\/([^/]+)\/visuals\/?$/;
 const PROJECT_PATH = /^\/projects\/([^/]+)(?:\/|$)/;
 
 /** The project the current page belongs to, if any (not the "new project" form). */
@@ -20,7 +21,7 @@ function activeItems(pathname: string) {
       href: "/projects",
       label: "Projects",
       icon: FolderOpen,
-      match: (p: string) => p.startsWith("/projects") && !RESEARCH_PATH.test(p),
+      match: (p: string) => p.startsWith("/projects") && !RESEARCH_PATH.test(p) && !VISUALS_PATH.test(p),
     },
   ];
   if (project) {
@@ -31,6 +32,13 @@ function activeItems(pathname: string) {
       icon: Search,
       match: (p: string) => RESEARCH_PATH.test(p),
     });
+    // M4: visuals are per project too.
+    items.push({
+      href: `/projects/${project}/visuals`,
+      label: "Visuals",
+      icon: Image,
+      match: (p: string) => VISUALS_PATH.test(p),
+    });
   }
   return items;
 }
@@ -39,7 +47,7 @@ function activeItems(pathname: string) {
 const LATER = [
   { label: "Drafts", icon: FileText },
   { label: "Research", icon: Search, needsProject: true },
-  { label: "Visuals", icon: Image },
+  { label: "Visuals", icon: Image, needsProject: true },
   { label: "Narration", icon: Mic },
   { label: "Production", icon: Clapperboard },
 ];
@@ -87,7 +95,7 @@ export function SidebarNav({ pathname, onNavigate }: { pathname: string; onNavig
               <Icon aria-hidden className="size-4" />
               {label}
               <span className="sr-only">
-                {needsProject ? "(open a project to research it)" : "(coming in a later milestone)"}
+                {needsProject ? "(open a project to use it)" : "(coming in a later milestone)"}
               </span>
             </span>
           </li>
