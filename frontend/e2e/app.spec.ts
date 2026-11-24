@@ -424,6 +424,10 @@ test("research: prepare claims, a confirmed search, a queued and a fetched URL, 
   await add.getByRole("button", { name: "Fetch page" }).click();
   const read = page.getByRole("button", { name: /^Read / }).first();
   await expect(read).toBeVisible({ timeout: 30_000 });
+  // The fetch job's end re-enables the source actions (fading in from 50% opacity): wait for
+  // that final state, so the scan below never sees a half-faded button behind the dialog.
+  await expect(page.getByRole("button", { name: /^Search / })).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: /Import document/ })).toBeEnabled();
   await read.click();
   const text = page.getByLabel("Snapshot text");
   await expect(text).toContainText("1945");
