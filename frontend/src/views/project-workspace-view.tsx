@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, CheckCircle2, Search, XCircle } from "lucide-react";
+import { BookOpen, CheckCircle2, ImageIcon, Search, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
@@ -82,6 +82,11 @@ export function ProjectWorkspaceView() {
               <Button asChild variant="outline" size="lg">
                 <Link href={`/projects/${encodeURIComponent(p.id)}/research`}>
                   <Search aria-hidden /> Research
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="lg">
+                <Link href={`/projects/${encodeURIComponent(p.id)}/visuals`}>
+                  <ImageIcon aria-hidden /> Visuals
                 </Link>
               </Button>
             </>

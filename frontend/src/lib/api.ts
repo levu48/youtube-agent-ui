@@ -146,6 +146,8 @@ export interface SystemConfig {
   default_language: Language;
   default_model: string;
   providers: string[];
+  research_network?: boolean;
+  visuals_network?: boolean;
 }
 
 export interface DraftJobInput {
@@ -807,6 +809,25 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+/** A multipart POST (the browser sets the boundary); same CSRF handling as `request`. */
+async function postForm<T>(path: string, form: FormData, retry = true): Promise<T> {
+  const headers = new Headers({ "X-CSRF-Token": await csrfToken() });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { method: "POST", body: form, headers, cache: "no-store" });
+  } catch {
+    throw new ApiError(0, "network_error", "Cannot reach the local backend. Is it running?");
+  }
+  if (res.status === 403 && retry) {
+    const body = await res.clone().json().catch(() => null);
+    if (body?.error?.code === "csrf_failed") {
+      await csrfToken(true);
+      return postForm<T>(path, form, false);
+    }
+  }
+  return parse<T>(res);
+}
+
 export const api = {
   engine: () => request<EngineInfo>("/system/engine"),
   ollama: () => request<OllamaInfo>("/system/ollama"),
@@ -891,10 +912,211 @@ export const api = {
     id: string,
     body: { expected_revision: string; url: string; fetch: "queue" | "live"; network?: boolean; allow_hosts?: string[] },
   ) => post<JobStarted>(`/projects/${encodeURIComponent(id)}/research/sources`, body),
+  visuals: (id: string) => request<VisualsView>(`/projects/${encodeURIComponent(id)}/visuals`),
+  visualsPlan: (id: string, expected_revision: string) =>
+    post<JobStarted>(`/projects/${encodeURIComponent(id)}/visuals/plan`, { expected_revision }),
+  acquirePreview: (id: string, body: AcquireParams & { expected_revision: string }) =>
+    post<AcquirePreviewResult>(`/projects/${encodeURIComponent(id)}/visuals/acquire/preview`, body),
+  acquire: (
+    id: string,
+    body: AcquireParams & { expected_revision: string; network: true; preview_sha256: string; allow_hosts: string[] },
+  ) => post<JobStarted>(`/projects/${encodeURIComponent(id)}/visuals/acquire`, body),
+  visualsImport: (id: string, form: FormData) =>
+    postForm<{ result: ImportResult; visuals: VisualsView }>(`/projects/${encodeURIComponent(id)}/visuals/import`, form),
   eventsUrl: (id: string, after: number) =>
     `${BASE}/jobs/${encodeURIComponent(id)}/events?after=${after}`,
 };
 
+/** A candidate's image, addressed by engine ID and its content hash (never a path). */
+export function candidateImageUrl(projectId: string, c: { id: string; sha256: string | null }): string | null {
+  if (!c.sha256) return null;
+  return `${BASE}/projects/${encodeURIComponent(projectId)}/visuals/candidates/${encodeURIComponent(c.id)}/image?sha256=${c.sha256}`;
+}
+
+/** An applied asset's image, by asset ID and the content address of its file. */
+export function assetImageUrl(projectId: string, a: { asset_id: string; sha256: string | null }): string | null {
+  if (!a.sha256) return null;
+  return `${BASE}/projects/${encodeURIComponent(projectId)}/visuals/assets/${encodeURIComponent(a.asset_id)}/image?sha256=${a.sha256}`;
+}
+
 export function isTerminal(status: JobStatus): boolean {
   return TERMINAL_JOB_STATUSES.includes(status);
 }
+
+// ---------------------------------------------------------------------- visuals (M4 UI-A)
+// Mirrors the engine's `visuals-state --json` (scheme m4-visuals-state-1, engine D-122).
+
+export type ApplyState =
+  | "none"
+  | "existing_shots"
+  | "selected_not_applied"
+  | "applied_current"
+  | "changed_since_apply"
+  | "draft_edited";
+export type Integrity = "ok" | "missing" | "mismatch";
+export type CandidateBinding = "recorded" | "inferred" | "ambiguous" | "missing";
+
+export interface EngineFinding {
+  severity: string;
+  stage: string;
+  code: string;
+  artifact: string | null;
+  detail: string;
+  next_action: string | null;
+}
+
+export interface VisualsGate {
+  status: string;
+  findings: EngineFinding[];
+}
+
+export interface CandidateRights {
+  status: "accepted" | "manual_review" | "rejected" | "not_applicable" | string;
+  license_id?: string | null;
+  license_name?: string | null;
+  license_url?: string | null;
+  attribution_required?: boolean;
+  creator?: string | null;
+  credit?: string | null;
+  credit_line?: string | null;
+  restrictions?: string[];
+  reasons?: string[];
+}
+
+export interface VisualCandidate {
+  id: string;
+  scene_id: string;
+  source_type: string;
+  provider: string;
+  kind: string;
+  title: string | null;
+  status: string;
+  selectable: boolean;
+  placeholder: boolean;
+  synthetic: boolean;
+  local_path: string | null;
+  sha256: string | null;
+  width?: number | null;
+  height?: number | null;
+  format?: string | null;
+  source_page_url: string | null;
+  rights: CandidateRights;
+  disclosure_label: string | null;
+  review_reasons: string[];
+  warnings: string[];
+  rights_fingerprint?: string;
+}
+
+export interface VisualPlanScene {
+  scene_id: string;
+  section_id: string | null;
+  desired_kind: string;
+  brief: string;
+  search_query: string | null;
+  search_enabled: boolean;
+  generation_enabled: boolean;
+  requires_manual_asset: boolean;
+  notes?: string;
+  policy_reason?: string;
+  review_reasons?: string[];
+}
+
+export interface SceneState {
+  scene_id: string;
+  apply_state: ApplyState;
+  draft_shots: Record<string, unknown>[];
+  selection_shots: Record<string, unknown>[] | null;
+  applied_shots: Record<string, unknown>[] | null;
+}
+
+export interface AssetFacts {
+  asset_id: string;
+  scene_ids: string[];
+  candidate_id: string | null;
+  candidate_ids: string[];
+  candidate_binding: CandidateBinding;
+  sha256: string | null;
+  local_path: string | null;
+  image: Integrity | null;
+  record_intact: boolean;
+  problem: string | null;
+  credit_problems: string[];
+  fixture: boolean;
+  rights_current: boolean;
+  rights_reason: string | null;
+}
+
+export interface VisualsReport {
+  render_ready: boolean;
+  errors: unknown[];
+  warnings: unknown[];
+  scenes: { scene_id: string; disposition: string; messages: string[] }[];
+  unpublishable: unknown[];
+  image_integrity: unknown[];
+  [key: string]: unknown;
+}
+
+export interface VisualsView {
+  scheme: string;
+  revision: string;
+  revision_scheme: string;
+  inputs: Record<string, string | null>;
+  evidence_inputs: Record<string, string | null>;
+  pending_journals: EngineFinding[];
+  recovery_required: boolean;
+  catalog_trusted: boolean;
+  catalog_problems: string[];
+  plan: { scenes: VisualPlanScene[] } | null;
+  candidates: Record<string, VisualCandidate[]>;
+  selection: { scenes: { scene_id: string; shots: { candidate_id: string }[] }[] } | null;
+  clearance_history: unknown;
+  applied: Record<string, unknown> | null;
+  integrity: Record<string, Integrity>;
+  scenes: SceneState[];
+  assets: AssetFacts[];
+  report: VisualsReport;
+  gates: { g1: VisualsGate; g3: VisualsGate };
+  narration: Record<string, string>;
+  network: { enabled: boolean; search_provider: "wikimedia" | "fixture" | string };
+  editing: { supported: boolean; reason: string | null };
+  active_job_id: string | null;
+}
+
+export interface AcquireParams {
+  scene_ids: string[];
+  max_candidates_per_scene: number;
+}
+
+export interface AcquirePreview {
+  scheme: string;
+  project_id: string;
+  revision: string;
+  search_provider: string;
+  image_provider: string;
+  scene_ids: string[];
+  queries: { scene_id: string; query: string }[];
+  generate: string[];
+  max_candidates_per_scene: number;
+  timeout: number;
+  concurrency: number;
+  force: boolean;
+  hosts: string[];
+}
+
+export interface AcquirePreviewResult {
+  preview: AcquirePreview;
+  preview_sha256: string;
+}
+
+export interface ImportResult {
+  candidate_id: string;
+  scene_id: string;
+  sha256: string | null;
+  width: number | null;
+  height: number | null;
+  rights_status: string;
+  warnings: string[];
+  revision: string | null;
+}
+
+export const IMPORT_KINDS = ["archival", "document", "chart", "generated"] as const;

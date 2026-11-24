@@ -475,6 +475,7 @@ describe("sidebar", () => {
     expect(screen.getByRole("link", { name: "Projects" })).not.toHaveAttribute("aria-current");
     rerender(<SidebarNav pathname="/" />);
     expect(screen.queryByRole("link", { name: "Research" })).not.toBeInTheDocument();
-    expect(screen.getByText("(open a project to research it)")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Visuals" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("(open a project to use it)")).toHaveLength(2); // Research, Visuals
   });
 });

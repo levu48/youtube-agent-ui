@@ -23,6 +23,8 @@ const CANCEL_COPY: Record<string, { title: string; confirm: string; after: strin
   "research-plan": { title: "Stop preparing claims?", confirm: "Stop preparing claims", after: "you can prepare the claims again later" },
   "research-collect": { title: "Stop this source search?", confirm: "Stop search", after: "you can search again later" },
   "research-add-url": { title: "Stop adding this source?", confirm: "Stop adding", after: "you can add the URL again later" },
+  "visuals-plan": { title: "Stop planning visuals?", confirm: "Stop planning", after: "you can plan the visuals again later" },
+  "visuals-acquire": { title: "Stop this image search?", confirm: "Stop search", after: "scenes already searched stay recorded; you can search again later" },
 };
 const CANCEL_FALLBACK = { title: "Stop this job?", confirm: "Stop job", after: "you can start it again later" };
 
@@ -84,6 +86,7 @@ export async function refreshAfterJob(qc: QueryClient, jobId: string) {
   await Promise.all([
     qc.invalidateQueries({ queryKey: qk.project(job.project_id) }),
     qc.invalidateQueries({ queryKey: qk.research(job.project_id) }),
+    qc.invalidateQueries({ queryKey: qk.visuals(job.project_id) }),
     qc.invalidateQueries({ queryKey: ["jobs"] }),
     qc.invalidateQueries({ queryKey: qk.projects }),
   ]);

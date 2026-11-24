@@ -14,7 +14,12 @@ export function mockFetch(routes: Record<string, (body?: unknown, query?: URLSea
     const url = new URL(String(input), "http://127.0.0.1:3000");
     const method = (init?.method ?? "GET").toUpperCase();
     const path = url.pathname.replace(/^\/api\/v1/, "");
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    const body =
+      init?.body instanceof FormData
+        ? Object.fromEntries(Array.from(init.body.entries()).map(([k, v]) => [k, typeof v === "string" ? v : `file:${(v as File).name}`]))
+        : init?.body
+          ? JSON.parse(String(init.body))
+          : undefined;
     calls.push({ method, path, body, query: url.searchParams });
     const handler = routes[`${method} ${path}`] ?? (path === "/session" ? () => ({ json: { csrf_token: "t" } }) : null);
     if (!handler) return new Response(JSON.stringify({ error: { code: "not_found", message: "nf" } }), { status: 404 });
