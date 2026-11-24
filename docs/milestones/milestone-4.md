@@ -1,6 +1,9 @@
 # Milestone 4 — Visuals: Plan, Candidate Gallery, Rights and Selection (G3)
 
-**Status:** specification; owner decisions approved 2026-11-23. The engine needs prerequisite PRs (V1, V2) before the UI can drive this stage; V1 is implemented on engine branch `feat/visuals-cli-contract` (decision D-121, engine PR #16, including its review fixes at `03256a4`), and this document matches it. Engine facts below were verified read-only at engine `main` `fb6bffc` (the pinned `ENGINE_REF`), including an offline probe with the fixture and mock providers.
+**Status:** specification; owner decisions approved 2026-11-23. The engine needs two prerequisite PRs (V1, V2) before the UI can drive this stage.
+- **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
+- **V2 is not started.**
+- The baseline sections ("Existing baseline", "Selection, apply, rights and G3 at `fb6bffc`") describe the engine before V1. They were verified read-only at `fb6bffc`, and V1 changes none of their gate or rights policy.
 
 **Goal:** a reviewer can choose one or more images for every scene of an approved draft in the browser, see each image's licence evidence, record rights clearances where a licence cannot be verified automatically, and apply the selection to the draft, with the `youtube-agent` engine as the only authority. This covers:
 - the visual plan (one planned visual per scene, with its kind and search query);
@@ -35,7 +38,7 @@
 - Placeholder, mock and fixture images are never publishable.
 - Chart scenes are import only. Archival and document scenes are never generated.
 
-**UI.** M1–M3 are merged (UI `main`, `ENGINE_REF` `fb6bffc`). M4 reuses:
+**UI.** M1–M3 are merged (UI `main`; their engine was `fb6bffc`, and `ENGINE_REF` is now `65c5f52`, the V1 merge). M4 reuses:
 - the job runner, SSE and cancellation;
 - `_engine_write` (project held, refusals mapped);
 - the preview-and-confirm-hosts pattern from research collection;
@@ -76,7 +79,7 @@ The UI never writes, moves or deletes engine-owned files, never passes a user-su
 Two engine PRs in `youtube-agent`, each with a decision entry, README update and tests, are reviewed and merged before the UI PR that needs them. If one cannot land, the UI ships only what the merged capabilities allow and does not claim M4 complete.
 
 ### What the engine already guarantees (fb6bffc), and what V1/V2 add
-**Existing** (verified at `fb6bffc`, which is also the engine's current `main`):
+**Existing** (verified at `fb6bffc`, and unchanged by V1):
 - **Content-addressed images.** Every candidate image is decoded, re-encoded as PNG or JPEG, and stored as `render/visuals/candidates/<sha256>.<png|jpg>`. Its `sha256` and `local_path` are recorded in `candidates.json` (`processing.py`, `store_blob` in `storage/visual_cache.py`).
   - Only PNG and JPEG are ever stored for use. An imported TIFF survives only as an original in `render/visuals/originals/`, which nothing serves.
 - **Decode limits.** 20 MB, 40 megapixels, and Pillow's decompression-bomb guard (`processing.py:25-31, 121-144`).
@@ -86,22 +89,30 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
 - **Applied images** are bound through `applied.json` and the content address, and checked by `asset_problem` (table above).
 - **Not covered today:** contact sheets (`render/visuals/previews/<scene>.png`) are rewritten in place with **no recorded hash**. M4 does not serve them (owner decision 6).
 
-### V1 — visuals CLI contract (reports; no gate policy change)
+### V1 — visuals CLI contract (reports; no gate policy change). Merged: engine PR #16, D-122, `65c5f52`
 - **Read-only state command.** `visuals-state --json` returns one consistent snapshot of everything the UI shows, and writes nothing: no report, no directory, no recovery.
   - **Consistency.** It uses the existing read-only path (`DraftStore.inspector`, as `visuals_evaluate` and `production-check` do, D-100): it reads every input once, evaluates from those bytes, then compares the input hashes again and retries (at most 3 times, then `concurrency`) if anything changed. A pending journal is reported, not recovered.
     - The inputs include the draft manifest (the snapshot is parsed from the same bytes it compares) and the three journal manifests (`render/llm`, `render/research`, `render/production`). Every reported fact, including G1, G3, `pending_journals` and `recovery_required`, comes from that one snapshot. Image bytes are not part of the comparison; they are checked against their recorded hashes when read.
     - A refusal computed during the read (for example `revision_mismatch`) is reported only if the inputs did not change meanwhile; otherwise the read is retried.
   - **Contents:**
     - `revision` (below) and `inputs: {rel: sha256|null}`, the exact files and hashes the snapshot was built from, including the draft files behind `draft_revision`;
+    - `evidence_inputs: {reference: sha256|null}`, the local clearance evidence documents the snapshot read (null: missing, unsafe or not a file). They are checked for consistency like `inputs`, but are **not** part of the revision (see Evidence documents);
     - `catalog_trusted`, the plan scenes, and the candidates with rights evidence, `rights_fingerprint`, `local_path`, `sha256` and `format`;
     - the selection, the clearances (and, after V2, their history), and `applied.json`;
     - the evaluation (the `VisualReport` fields);
     - `integrity` for every **selected**, **cleared** or **applied** candidate (`ok | missing | mismatch`, from `blob_ok`);
     - per scene, `apply_state` (below) and `draft_shots`;
-    - per asset shown by the draft, `{asset_id, scene_ids, candidate_id|null, sha256, local_path, image, record_intact, problem, credit_problems, fixture, rights_current, rights_reason}`:
+    - per asset shown by the draft, `{asset_id, scene_ids, candidate_id|null, candidate_ids, candidate_binding, sha256, local_path, image, record_intact, problem, credit_problems, fixture, rights_current, rights_reason}`:
+      - `candidate_ids` are every candidate the asset is bound to (sorted), and `candidate_id` is set only when there is exactly one. `candidate_binding` says how they were found:
+        - `recorded`: `applied.json` `asset_candidates`, written by every apply since D-122;
+        - `inferred`: an asset applied before D-122, with exactly one catalogue candidate with its bytes;
+        - `ambiguous`: such an asset with several candidates with its bytes (the engine never picks one);
+        - `missing`: none.
       - `problem` and `credit_problems` come from the existing `asset_problem` and `credit_problems`, and `fixture` from the release fixture-media rule (factored out as `fixture_media`). These are the functions release uses, applied to the **draft's** shots so they are visible before export;
       - `image` (`ok | missing | mismatch`) checks the bytes against the content address in the file name, and `record_intact` checks the record against `applied.json`. Both are independent of rights, because `asset_problem` stops at its first finding: an unverified asset's corrupted bytes would otherwise be hidden behind "rights not verified";
-      - `rights_current` recomputes `_rights_decision` for the asset's candidate (matched by `sha256`) with the **current** catalogue and clearances; `rights_reason` is `not_verified | clearance_revoked | clearance_invalid | rights_changed | candidate_missing | null` (`not_verified`: applied without verified rights, as mock and fixture images always are);
+      - `rights_current` recomputes `_rights_decision` with the **current** catalogue and clearances for **every** bound candidate, and is true only if all of them pass. `rights_reason` is `not_verified | clearance_revoked | clearance_invalid | rights_changed | candidate_missing | candidate_ambiguous | null`:
+        - `not_verified`: applied without verified rights, as mock and fixture images always are;
+        - `candidate_ambiguous`: `candidate_binding: ambiguous`, so rights are never current;
     - `gates`: `g1` (`gates.editorial` status and findings) and `g3` (`gates.visuals` status and findings), computed from the same snapshot. Nothing new is computed for either; they are the existing gate functions;
     - `pending_journals`: every interrupted publication, as the existing `pending_journals` reports it (each a `recovery_required` blocker finding with its `next_action`);
     - `recovery_required` (boolean): see Pending recovery below.
@@ -111,7 +122,8 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
   - While `recovery_required` is true, **nothing in the view is actionable**. G1, G3, the evaluation, `apply_state` and the asset facts describe the files as they are, unrecovered, and are not a certification: a G3 `ready` or an `applied_current` scene does not mean what it says until recovery.
   - G1 itself is `recovery_required` when the draft/visuals journal is pending (existing behaviour). G3 is unchanged (no gate policy change in V1).
   - Recovery is done by a locked engine command: any visuals or draft command for the draft/visuals journal (`visuals-check`), any research command for the research journal (`research-check`), or `resume` for all three. M4 offers no recovery action in the browser (see Non-goals); the view shows the engine's `next_action`.
-  - An engine write carrying `--expect-revision` from such a snapshot is still safe: the locked command recovers first, so a roll-forward changes the revision (`revision_mismatch`), and a roll-back restores exactly the files the snapshot showed.
+  - **Engine writes refuse too.** Every visuals write that carries `--expect-revision` (plan, acquire before and after its network phase, import, apply) checks for a pending draft/visuals or research journal under the lock, **before** recovering it, and refuses with `recovery_required` (exit 9, `details.journals`). Nothing is recovered or written. The dry run refuses the same way. So a write from the UI never recovers a journal as a side effect, and `checked_by: engine` refusals are expected even if the backend's own check passed a moment earlier.
+  - CLI commands run without `--expect-revision` keep their earlier behaviour: they recover first, then act.
 - **`apply_state` per scene**, computed by the engine from the snapshot. Apply's shot construction is factored out, so "what apply would write" is the same code:
 
   | `apply_state` | Engine condition |
@@ -132,6 +144,12 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
 - **`--expect-revision`** on every visuals mutation, checked under the lock before anything is published. `visuals-acquire` checks it again after the network phase (as research collect does, D-118).
 - **Acquisition preview and binding** (see Network confirmation).
 - **Import from stdin.** `visuals-import --stdin --title T --expect-revision=R` reads the image bytes from standard input. They are size-limited, decoded, hashed and staged exactly like a download, outside the lock. Under the lock, the revision is checked **before** the candidate, catalogue or provenance is published; on a mismatch the staged bytes are discarded and nothing is recorded. No filesystem path crosses the boundary. `--title` names the image (with `--file` it is the file name); the other flags are unchanged.
+- **Apply binds assets to candidates.** `applied.json` gains `asset_candidates: {asset_id: [candidate_id]}`, the candidates each applied asset was written from. Bindings are pruned to the assets the new draft still shows, so a candidate whose scenes were all replaced is no longer reported as applied. Bindings are per asset, not per scene: an asset still shown by an unchanged scene keeps every earlier candidate, and `rights_current` needs all of them.
+- **Apply refuses conflicting provenance for shared bytes.** Two candidates can have the same image bytes, and so the same asset. Apply refuses with `not_ready` (exit 2, nothing written) when the assets it would write give one asset two different rights records:
+  - two candidates selected in the same apply with different rights;
+  - a candidate selected now whose rights differ from the record of an asset that a scene left unselected still shows. The retained record is the `assets.json` record, or failing that the bound candidates' records, or for a project applied before D-122 every catalogue candidate with those bytes (none is guessed).
+
+  The compared fields are source URL, creator, licence name and URL, attribution, rights verification and basis, prompt and generation provider (not `kind`). `--replace-assets` does not bypass the check. The message names the asset, the candidates and the scenes. The reviewer resolves it by choosing a compatible candidate, or by selecting new shots for every scene that shows the asset.
 - **Apply repairs a missing applied image.** When a selected asset's content-addressed file is missing and its candidate passes `blob_ok`, apply installs it even if the records are unchanged (`status: images_restored`, with the asset IDs). A file with other bytes (or a symlink) is refused, now as `image_integrity` with the path, instead of apply reporting `already_current`, and is left for the CLI user to resolve: the UI never deletes it.
 - **Progress.** One line per scene searched, downloaded or rejected, on a progress logger.
 
@@ -177,6 +195,11 @@ Image bytes are **not** in the revision, because hashing every candidate on ever
 - **An applied image changed or removed while its candidate is intact.** `visuals-state` reports the asset's `image` (`mismatch` or `missing`), and release is blocked (`export_not_possible`). A missing file is restored by apply (V1). A file with other bytes is refused by apply and left for the CLI user.
 - **A hand-edited catalogue** is `catalog_untrusted`: nothing can be selected or cleared until `visuals-acquire` rebuilds it.
 
+**Evidence documents.** A clearance's `evidence` can name a local document in the project (for example a permission letter). Clearance validation hashes it, using the same containment rules as everywhere else (lexically safe, inside the project, a regular file; a remote URL is never fetched).
+- **One reading per snapshot.** Each distinct evidence reference is read once per snapshot and cached for that snapshot only, including a `null` result. All clearances citing the same document see the same reading.
+- **Changes during a read.** The snapshot compares every reading again at the end, and retries (then `concurrency`) if one changed. A snapshot never mixes two states of one document. The readings are reported as `evidence_inputs`.
+- **V1 limitation (deferred to V2).** The engine does not compare the document with the hash recorded at apply (`RecordedClearance.evidence_sha256`). Replacing a permission document with different contents therefore leaves the clearance valid and `rights_current: true`. Whether changed evidence invalidates an attestation, needs a new clearance or a re-apply, how evidence hashes enter the clearance history, and what it means for G3 and release, are V2 policy decisions. The UI must not present `rights_current` as proof that an evidence document is unchanged since apply.
+
 ### Network confirmation: the acquisition preview
 - **Preview.** `visuals-acquire --dry-run --json` contacts nothing and is read-only: it evaluates one snapshot through the same read-only path as `visuals-state` (no directory, lock, recovery or manifest save; retried if the inputs change). It honours `--expect-revision` (`revision_mismatch`, nothing written). It runs the same checks and preview function as a real run does under the lock, so the same state and parameters give the same `preview_sha256`. While a draft/visuals or research publication is pending it refuses with `recovery_required` (`details.journals`), because a run would first recover and then act on other files. It returns the canonical preview `P` and `preview_sha256 = sha256(canonical_json(P))`, serialised as the revision is. `P` contains:
   - `scheme` (`m4-acquire-preview-1`), the engine `project_id`, the visuals `revision`, `search_provider`, and `image_provider` (always `none` from the UI);
@@ -200,10 +223,11 @@ One table for the engine contract, the backend and the UI. Each refusal writes n
 | `image_integrity` | engine; backend image endpoint | an image file is missing, a symlink, or has bytes other than its trusted recorded hash; `details.candidate_ids`, `asset_ids` or `path` | `409 image_integrity` |
 | `image_changed` | backend image endpoint only | the URL's `sha256` is not the current record's: the URL is outdated. Not an integrity failure | `409 image_changed`, with `details.current_sha256` (or null) |
 | `partial_acquire_failure` | engine | some image requests failed (including `host_not_allowed`); completed scenes were recorded. `details` is the run report, with `failures` by code | none: acquisition is a job, so this is the job's failure (exit 13), shown with its log and report, as M3 shows `partial_search_failure` |
-| `recovery_required` | engine (`visuals-acquire --dry-run`); backend pre-check on every visuals write and preview | a draft/visuals or research publication is pending (`details.journals`); nothing is previewed or written until it is recovered. `details.checked_by` is `backend` or `engine` | `409 recovery_required` |
-| `human_edit_conflict`, `g1_not_current`, `concurrency`, `invalid_input`, `not_ready`, `provider_unavailable` | engine | as their names say, with the M3 mappings | as M3 |
+| `recovery_required` | engine (`visuals-acquire --dry-run`, and every write with `--expect-revision`, before recovering); backend pre-check on every visuals write and preview | a draft/visuals or research publication is pending (`details.journals`); nothing is previewed, recovered or written. `details.checked_by` is `backend` or `engine` | `409 recovery_required` |
+| `not_ready` (apply) | engine | among others, the shared-bytes provenance conflict (V1): one asset would get two different rights records. The message names the asset, candidates and scenes | `409 not_ready`, with the engine's message |
+| `human_edit_conflict`, `g1_not_current`, `concurrency`, `invalid_input`, `provider_unavailable` | engine | as their names say, with the M3 mappings | as M3 |
 
-Exit codes stay as before D-121: `revision_mismatch`, `preview_mismatch`, `recovery_required` and `concurrency` 9; `image_integrity`, `catalog_untrusted`, `not_ready` and `invalid_input` 2; `g1_not_current` 12; `partial_acquire_failure` 13.
+Exit codes stay as before D-122: `revision_mismatch`, `preview_mismatch`, `recovery_required` and `concurrency` 9; `image_integrity`, `catalog_untrusted`, `not_ready` and `invalid_input` 2; `g1_not_current` 12; `partial_acquire_failure` 13.
 
 Check order inside the engine (the first failure wins): `revision_mismatch` → `g1_not_current` → `catalog_untrusted` → `history_tampered` → `invalid_patch` → `image_integrity`. A tampered or untrusted file therefore never shows as a patch error, and bytes are hashed only for a patch that is otherwise valid.
 
@@ -270,12 +294,13 @@ Every write holds the project (`409 job_conflict` / `project_busy`) and carries 
   2. The text fields are validated before the file part is read, and `expected_revision` is compared with the backend's current snapshot. A mismatch gives `409 revision_conflict` before any upload bytes are read.
   3. The file is read in memory with the size cap enforced while streaming, and its magic bytes are checked.
   4. The bytes go to `visuals-import --stdin --expect-revision=R`, which checks the revision again under the lock before publishing (V1). The engine's check is the authoritative one.
+- Bytes the engine cannot decode are refused by it with the generic code `error` (exit 3, "unrecognised image data"), not `invalid_input`. The backend's magic-byte check in step 3 therefore answers `422 invalid_input` itself before the engine runs, and an engine `error` from import is shown as a failed import with the engine's message.
 - The UI never stores the bytes on disk.
 
 **Image endpoints: authorisation, verification and caching.** Images are addressed by engine ID **and** expected content hash, never by file name or path. So no request can name an arbitrary project file, and a URL always means one exact image.
 
 1. **Check the request.** `sha256` is required and must be 64 lowercase hex; the ID must match its engine pattern. Otherwise `400 invalid_input`.
-2. **Use a current snapshot.** The backend keeps the latest `visuals-state` result per project, with its `inputs` hash map. Before resolving a record, it re-hashes the files in `inputs`. These are small JSON files the engine documents, and a stat key (inode, size, mtime) avoids re-reading an unchanged one. Any difference, from the UI, a job or the CLI, discards the snapshot and runs `visuals-state` again (single-flight per project). If that fails, the response is `503 state_unavailable` and nothing is served. Every write and every job end also discards it. A stale snapshot therefore cannot authorise an image the current state no longer references.
+2. **Use a current snapshot.** The backend keeps the latest `visuals-state` result per project, with its `inputs` and `evidence_inputs` hash maps. Before resolving a record, it re-hashes the files in both. Evidence paths are opened with the engine's containment rules (relative, inside the project, no symlink, a regular file; a missing or refused one counts as `null`), and a URL reference is never fetched. These are small JSON files the engine documents, and a stat key (inode, size, mtime) avoids re-reading an unchanged one. Any difference, from the UI, a job or the CLI, discards the snapshot and runs `visuals-state` again (single-flight per project). If that fails, the response is `503 state_unavailable` and nothing is served. Every write and every job end also discards it. A stale snapshot therefore cannot authorise an image the current state no longer references.
 3. **Resolve the record** in that snapshot:
    - `candidates/{id}`: the trusted catalogue entry (`catalog_trusted` must be true, otherwise `409 catalog_untrusted`), with `local_path`, `sha256` and `format`;
    - `assets/{id}`: the `assets.json` record whose hash equals `applied.json` `assets[id]` (the existing `asset_problem` record check), with `local_path`. Its hash is the content address in the file name.
@@ -326,6 +351,8 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
   | Applied image missing or modified | asset `image` (`missing` or `mismatch`), with `problem` (from `asset_problem`) |
 
   The frontend keeps no state machine of its own, and never combines these into a different readiness or gate.
+- **Applied assets.** Each asset shows its `candidate_ids` and `candidate_binding`. `ambiguous` reads "Applied before candidate tracking; several candidates have these bytes" and `rights_reason: candidate_ambiguous` is shown as not current. The UI never picks one of the candidates itself.
+- **Evidence.** A cleared candidate's local evidence document shows the snapshot's `evidence_inputs` entry (found, or missing/refused). The clearance and asset facts carry the note "The engine does not yet check whether this document changed since the clearance" until V2 decides that policy.
 - **Pending recovery.** When the view has `recovery_required: true`:
   - a blocking banner at the top of the workspace says that an interrupted publication must be recovered, lists each `pending_journals` finding's detail and the engine's `next_action` text (a CLI command) as plain text, and says that nothing shown is certified until then;
   - plan, preview and acquire, import, selection and clearance edits, validation and apply are disabled, each with the banner as its reason (and any open confirmation dialog disables submit);
@@ -346,6 +373,7 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
   - A change in records, from the UI, the CLI or a job, is refused with `revision_mismatch`.
   - A change in image bytes alone is refused by apply's own re-hash with `image_integrity`.
   - The result (`published`, `already_current` or `images_restored`) and its scene and asset lists are shown as the engine returns them.
+  - A shared-bytes provenance refusal (`409 not_ready`) is shown with the engine's message. It can come from a later apply: the dialog explains that another scene still shows the same image under different rights, and that the fix is a compatible candidate or new shots for every scene the message names.
 - **After apply,** G1 shows as out of date (`stale_after_apply`) until `draft-approve` runs again (M2's flow). Apply also changes the draft revision, so any open draft editor reloads. Selecting and applying again need no G1 re-approval first; release needs it.
 - **G3** is shown as `visuals-state` reports it (the existing `gates.visuals()`, or its decision-5 version once merged), and is never inferred, strengthened, weakened or "approved" by the UI.
 - **Release eligibility** is not run from the visuals page (release is M6). The page shows the engine's per-asset facts, which use the same functions as release.
@@ -370,7 +398,8 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
 - **Backend.**
   - The argv builders and the excluded flags.
   - Requests and errors: the upload limits, magic bytes and field order (a bad `expected_revision` refused before the file is read); the edit request models; every row of the Error codes table, including `preview_mismatch` and `recovery_required` from both layers; `exclusive`.
-  - Pending recovery: with `recovery_required: true` in the snapshot, every visuals write and the preview are refused with `409 recovery_required` and no engine command runs; the view and image reads continue; a CLI recovery (the journal manifest changes) invalidates the snapshot and lifts the refusal; a pending production package journal alone refuses nothing.
+  - Pending recovery: with `recovery_required: true` in the snapshot, every visuals write and the preview are refused with `409 recovery_required` and no engine command runs; the view and image reads continue; a CLI recovery (the journal manifest changes) invalidates the snapshot and lifts the refusal; a pending production package journal alone refuses nothing; an engine write refused with `recovery_required` (`checked_by: engine`) after the backend check passed.
+  - Snapshot freshness: a changed, appearing or removed `evidence_inputs` document invalidates the snapshot; an evidence path outside the project or through a symlink is never opened.
   - A fake engine extended with the V1/V2 JSON, errors and race modes.
 - **Image endpoints and caching** (unit tests):
   - served with the immutable cache headers: a catalogued candidate, an applied asset;
@@ -402,6 +431,7 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
   - rights metadata changed after apply (`rights_reason: rights_changed`);
   - applied image bytes modified, and removed: asset `problem`; a missing file restored by apply (`images_restored`); a modified one refused (`image_integrity`) and left in place;
   - a candidate image intact while its applied asset image is corrupted: the candidate's `integrity: ok`, the asset's `problem` set;
+  - two candidates with the same bytes and different rights: apply refused with `not_ready` in one apply, and in a later apply while an unselected scene still shows the asset; compatible candidates accepted; `candidate_binding` `recorded`, and `ambiguous` with `candidate_ambiguous` for a pre-D-122 project;
   - a replacement selection applied, then `draft-approve`: `applied_current`, `rights_current` true, G1 approved, G3 `ready`;
   - release: after `draft-export`, `production-check --mode release --json` has no `image_not_releasable`, `fixture_image` or `credit_incomplete` for the good case, and is blocked for the corrupted-asset case (`export_not_possible`, as verified in V1), and for the revoked case with decision 5.
 - **Network confirmation** (backend and frontend):
@@ -460,7 +490,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 | PR | Repository | Depends on | Content | Verified by |
 |---|---|---|---|---|
 | UI-0 | UI | none | this specification and the roadmap | review |
-| V1 | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot, journal manifests included: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions, `pending_journals` and `recovery_required`); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical, read-only acquisition preview (refusing `recovery_required`) with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
+| V1 (**merged**, PR #16, `65c5f52`) | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot, journal manifests included: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions, `pending_journals` and `recovery_required`); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical, read-only acquisition preview (refusing `recovery_required`) with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
 | V2 | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
 | UI-A | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
 | UI-B | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
@@ -477,7 +507,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 - Recovering an interrupted publication from the browser: the view shows the engine's `next_action`, and the CLI user recovers it (a later milestone may add an explicit recovery action).
 
 ## Definition of done
-- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved).
+- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved). (V1: merged as `65c5f52`, recorded and pinned. V2: not started.)
 - [ ] The browser performs every visuals action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
 - [ ] Network requests go only to hosts the reviewer confirmed for that exact acquisition. The confirmation is bound to the engine's canonical preview (`preview_sha256`), checked by the backend and by the engine (`preview_mismatch` at both), and invalidated by any parameter or revision change. With `YTA_VISUALS_NETWORK=false` there are none. No paid call is possible from the UI.
 - [ ] Image integrity holds end to end:

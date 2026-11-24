@@ -60,7 +60,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ## Verified findings (2026-11-20)
 
-**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1; it is now `573ebdd` (see Milestone 2 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
+**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1. The pin moved to `573ebdd` for Milestone 2, `fb6bffc` for Milestone 3, and is now `65c5f52` (see Milestone 4 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
 
 **Invocation.** The UI runs `uv run --no-sync ytagent …` with `cwd=YTA_ENGINE_REPO`. `--no-sync` guarantees the UI never re-syncs/modifies the engine's virtualenv. `PYTHONUNBUFFERED=1` is set so output streams line by line.
 
@@ -249,6 +249,28 @@ Checked against the CLI, the source (`agents/research.py`, `research/checks.py`,
   - `research-check` adds only the non-blocking note `editorial_storyboard_changed`, and export already succeeds before the G1 re-approval.
 - **Before apply,** the research stage is `needs_review` with `G2 research: approved_not_applied`.
 - **A G2 from imported documents alone works.** A non-contested factual claim is verified with one real supporting passage; imported documents never count as independent roots, so a contested claim cannot rely on them. A quotation needs a supporting primary passage containing the quoted words or a translation traced to a primary original that is also linked to the claim; for an imported document "primary" needs an attestation of that edition.
+
+## Milestone 4: visuals V1 (engine D-122), verified at `65c5f52` (2026-11-24)
+
+**Pinned engine:** `ENGINE_REF` is now `65c5f52b4428ead00fa01b104ebb69816036d033`, the merge of `youtube-agent` PR #16 (D-122, the visuals CLI contract, with its three review rounds). This is the minimum engine for the M4 UI-A work. V2 (`visuals-edit`, the clearance history and the decision-5 G3 change) is not started. The full contract is in [milestone-4.md](milestones/milestone-4.md) (V1); this section records what was checked against the merged engine.
+
+**Required real-engine script.** `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` against a fresh clone at `65c5f52`: integration 8 tests, 0 skipped, 0 failed; E2E 17 passed, 1 allowed skip. Nothing in the UI uses the visuals commands yet, so this shows that M1–M3 still work at the new pin.
+
+**Offline CLI probe** (fresh clone at `65c5f52`, `ytagent 0.1.0`, a fixture-drafted English project, fixture search provider, no network):
+- **`visuals-state --project-root=P --json`** exits 0 and prints `{ok, scheme: m4-visuals-state-1, revision, revision_scheme: m4-visuals-revision-1, inputs, evidence_inputs, pending_journals, recovery_required, catalog_trusted, catalog_problems, plan, candidates, selection, clearance_history, applied, integrity, scenes, assets, report, gates: {g1, g3}}`. It writes nothing. Before a plan, G1 is `approved` and G3 `pending`; `evidence_inputs` is `{}` and `recovery_required` false.
+- **`visuals-plan --expect-revision=R --json`** prints `{ok, status: written, scenes, by_kind, requires_manual, revision}`. Repeating it with the old revision gives `{ok: false, error: {code: revision_mismatch, exit_code: 9, message}}` (exit 9). The text form of the message is also written to stderr.
+- **`visuals-acquire --search-provider=fixture --image-provider=none --dry-run --expect-revision=R --json`** contacts nothing and prints `{ok, dry_run: true, preview, preview_sha256}`, with `preview` = `{scheme, project_id, revision, search_provider, image_provider, scene_ids, queries, generate, max_candidates_per_scene, timeout, concurrency, force, hosts}`. With the fixture provider, `hosts` is `["commons.fixture.invalid", "upload.fixture.invalid"]`.
+- **`visuals-acquire … --expect-preview=H`** without `--allow-host` for each previewed host is `invalid_input` (exit 2). With both hosts and the right hash it runs (`ok: true`, per-scene `candidates_available`; 28 candidates, `catalog_trusted` true). A wrong hash is `preview_mismatch` (exit 9).
+- **After acquire,** every scene is `apply_state: none` and G3 is `needs_review`.
+- **`visuals-import --stdin --title=T --kind=K --provenance=… --expect-revision=R --json`** with bytes that are not an image is refused with the generic code `error` (exit 3, "unrecognised image data (not JPEG, PNG, WebP or TIFF)"), not `invalid_input`. `--kind` is one of `archival`, `document`, `chart`, `generated`.
+
+**From the merged source and the engine's contract tests** (`tests/test_visuals_cli_contract.py`, 133 tests; the full engine suite was 1534 passed, 14 deselected, offline). GitHub CI did not run on the engine PR (account billing block), so this rests on local runs:
+- **Recovery.** `recovery_required` is true when the `render/llm` or `render/research` journal is pending (`VISUALS_RECOVERY_JOURNALS`, `agents/visuals.py:174`). With `--expect-revision`, plan, acquire (before and after its network phase), import and apply refuse under the lock **before** recovering (`_recovery_guard`, `agents/visuals.py:194`): `recovery_required`, exit 9, `details.journals`, nothing written. Without `--expect-revision`, commands recover first as before.
+- **Snapshot.** `visuals-state` and the dry run read through `_inspect` (`agents/visuals.py:355`), retrying up to 3 times (`SNAPSHOT_ATTEMPTS`) before `concurrency`.
+- **Evidence documents.** Read once per snapshot per reference (`_State.evidence_sha`, `agents/visuals.py:275`), reported in `evidence_inputs`, not in the revision. The hash recorded at apply is **not** compared with the current document: a V1 limitation, deferred to V2.
+- **Applied assets.** `applied.json` has `asset_candidates` (`visuals/models.py:306`). Per asset, `candidate_ids`, `candidate_binding` (`recorded | inferred | ambiguous | missing`) and `candidate_id` (only when exactly one); `rights_reason` adds `candidate_ambiguous` (`agents/visuals_state.py:47-71`).
+- **Shared bytes.** Apply refuses with `not_ready` (exit 2) when one asset would get two different rights records, including against an asset still shown by a scene it leaves unselected (`_retained_conflicts`, `agents/visuals.py:1791`). `--replace-assets` does not bypass it.
+- **Decision numbers.** Narrate-text is D-121 and the visuals contract is D-122 (`docs/decisions.md` in the engine).
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
