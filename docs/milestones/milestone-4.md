@@ -1,6 +1,6 @@
 # Milestone 4 — Visuals: Plan, Candidate Gallery, Rights and Selection (G3)
 
-**Status:** specification. The engine needs prerequisite PRs (V1, V2) before the UI can drive this stage; none is started. Engine facts below were verified read-only at engine `main` `fb6bffc` (the pinned `ENGINE_REF`), including an offline probe with the fixture and mock providers.
+**Status:** specification; owner decisions approved 2026-11-23. The engine needs prerequisite PRs (V1, V2) before the UI can drive this stage; V1 is in progress. Engine facts below were verified read-only at engine `main` `fb6bffc` (the pinned `ENGINE_REF`), including an offline probe with the fixture and mock providers.
 
 **Goal:** a reviewer can choose one or more images for every scene of an approved draft in the browser, see each image's licence evidence, record rights clearances where a licence cannot be verified automatically, and apply the selection to the draft, with the `youtube-agent` engine as the only authority. This covers:
 - the visual plan (one planned visual per scene, with its kind and search query);
@@ -62,7 +62,7 @@ These are the engine's semantics today, read from the code. The UI displays them
 2. **Revocation after apply.** The asset keeps `rights_verified: true`. If the selection still names the candidate, G3 reports `image_rights_not_cleared`. If the selection was cleared or changed, the scene is ready (via existing shots, or via the new selection) and release's `asset_problem` passes on the frozen flag. So a revoked image can reach release.
 3. **Applied bytes.** A corrupted or missing applied image with an intact candidate passes G3; it is caught only by `release_storyboard`, after export. Re-applying does not repair either case: a missing image gives `already_current`; a corrupted one is refused.
 
-V1 reports these facts; owner decision 5 proposes closing gaps 1 and 2 in the gate. The UI never closes them itself.
+V1 reports these facts; V2 closes gaps 1 and 2 in the gate (owner decision 5). The UI never closes them itself.
 
 ## Critical dependency — engine capabilities (V1, V2)
 The UI never writes, moves or deletes engine-owned files, never passes a user-supplied path, and never passes force, replace or paid options. At `fb6bffc` a browser cannot drive visuals safely:
@@ -138,13 +138,13 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
   - `visuals-state` reports `rights_current: false, rights_reason: clearance_revoked` for it, and `integrity` is unchanged;
   - if the selection still names the candidate, the existing G3 already reports `image_rights_not_cleared`; otherwise only decision 5 makes G3 and release block;
   - **restoring eligibility:** a new `clearance.set` for the same bytes and evidence makes `rights_current` true again, and no apply is needed, because the asset record is unchanged. Choosing a replacement image needs `shots.set`, then apply, then G1 re-approval.
-- **G3 gate change (only if owner decision 5 is approved).** Proposed as a new engine decision entry, changing `gates.visuals()` and `asset_problem`:
+- **G3 gate change (owner decision 5, approved).** A new engine decision entry, changing `gates.visuals()` and `asset_problem`:
   - a scene with a selection is ready only when its `apply_state` is `applied_current`;
   - every asset the draft shows must have no `asset_problem` and `rights_current: true` (also for `existing_shots`);
   - new finding codes `visuals_not_applied` (with the scene IDs) and `applied_image_problem` (with the asset ID and the reason); `image_rights_not_cleared` is also used for an applied asset whose clearance was revoked;
   - `release_storyboard`'s `asset_problem` uses the same `rights_current` check, so a revoked image cannot reach release even with the selection cleared.
 
-  If decision 5 is declined, G3 stays as it is. The UI then shows the engine's G3 unchanged, and shows the `apply_state` and per-asset facts beside it as separate engine facts.
+  Until V2 is merged and pinned, G3 keeps its `fb6bffc` meaning, and the UI shows the `apply_state` and per-asset facts beside it as separate engine facts.
 
 ### Integrity: how changed, missing or substituted images are detected
 Image bytes are **not** in the revision, because hashing every candidate on every page load would cost a full read of each one. Instead, integrity is enforced by mandatory checks wherever bytes matter, all against the engine's recorded hashes:
@@ -188,13 +188,13 @@ One table for the engine contract, the backend and the UI. Each refusal writes n
 
 Check order inside the engine (the first failure wins): `revision_mismatch` → `catalog_untrusted` → `history_tampered` → `invalid_patch` → `image_integrity`. A tampered or untrusted file therefore never shows as a patch error, and bytes are hashed only for a patch that is otherwise valid.
 
-## Owner decisions (proposed defaults; none is approved yet)
-1. **`draft_revision` in the visuals revision.** Proposed: yes. Any draft change, including `research-apply`, then invalidates confirmed acquisitions and open edits. This is the safe choice, at the cost of an occasional "reload".
-2. **The plan step as a job.** Proposed: yes, for consistency with M3's plan job. It is fast and uses no network.
-3. **Clearance revocation.** Proposed: a revocation needs a reviewer and a reason, and is kept in history. A revoked clearance can only be replaced by a new `clearance.set`. Revocation never deletes assets or changes the draft.
-4. **TIFF originals.** Proposed: never served. The UI shows only the engine's normalised PNG or JPEG.
-5. **G3 requires applied, intact, currently cleared images.** Proposed: yes, as a V2 engine decision (the G3 gate change above). It closes gaps 1 and 2, and matches the engine's own message ("no selected, applied image"). It is a gate policy change, so it needs explicit approval. If declined, G3 keeps its current meaning, and the UI shows apply state and asset facts beside it.
-6. **Contact sheets are not served in M4.** Proposed: yes. The gallery shows each candidate from its own content-addressed image, which already has a recorded hash. Contact sheets are a CLI convenience, rewritten in place per scene, and show nothing the gallery lacks. This removes the need to record and bind their hashes. If they are wanted later, V1 would record `previews: {scene_id: {path, sha256, scene_catalog_sha256}}` in `manifest.json` under the lock, where `scene_catalog_sha256` is the canonical-JSON hash of that scene's trusted `candidates.json` entry. Only a sheet whose value equals the current digest would be served, so a catalogue change would invalidate only the affected scenes' sheets.
+## Owner decisions (all six approved by the owner on 2026-11-23)
+1. **`draft_revision` in the visuals revision.** Approved: yes. Any draft change, including `research-apply`, then invalidates confirmed acquisitions and open edits. This is the safe choice, at the cost of an occasional "reload".
+2. **The plan step as a job.** Approved: yes, for consistency with M3's plan job. It is fast and uses no network.
+3. **Clearance revocation.** Approved: a revocation needs a reviewer and a reason, and is kept in history. A revoked clearance can only be replaced by a new `clearance.set`. Revocation never deletes assets or changes the draft.
+4. **TIFF originals.** Approved: never served. The UI shows only the engine's normalised PNG or JPEG.
+5. **G3 requires applied, intact, currently cleared images.** Approved: yes, as a V2 engine decision (the G3 gate change above). It closes gaps 1 and 2, and matches the engine's own message ("no selected, applied image"). It is a gate policy change, approved explicitly; V2 records it as an engine decision entry.
+6. **Contact sheets are not served in M4.** Approved: yes. The gallery shows each candidate from its own content-addressed image, which already has a recorded hash. Contact sheets are a CLI convenience, rewritten in place per scene, and show nothing the gallery lacks. This removes the need to record and bind their hashes. If they are wanted later, V1 would record `previews: {scene_id: {path, sha256, scene_catalog_sha256}}` in `manifest.json` under the lock, where `scene_catalog_sha256` is the canonical-JSON hash of that scene's trusted `candidates.json` entry. Only a sheet whose value equals the current digest would be served, so a catalogue change would invalidate only the affected scenes' sheets.
 
 ## User journeys
 1. **Plan visuals.** With a current G1, the Visuals page offers **Plan visuals** (`visuals-plan`), a job with no network. The page lists every scene with its kind, search query, and whether it needs a human-provided image.
@@ -422,7 +422,7 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
 ## Delivery plan (independently reviewable PRs; none merged automatically)
 
 ```
-UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visuals-edit (selection, clearances, plan) [+ G3 change if decision 5]
+UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visuals-edit (selection, clearances, plan) [+ G3 change, decision 5]
                       └─► UI-A read-only workspace, plan job, previewed Wikimedia acquire, gallery, import   (needs V1)
                                                    V1 + V2 ─► UI-B selection, clearances, plan narrowing, validation, apply, G1 again, G3
 ```
@@ -431,7 +431,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 |---|---|---|---|---|
 | UI-0 | UI | none | this specification and the roadmap | review |
 | V1 | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical acquisition preview with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
-| V2 | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; **only if decision 5 is approved**, the G3 and release gate change with its decision entry | engine pytest |
+| V2 | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
 | UI-A | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, navigation | backend, frontend, E2E, real-engine script, CI |
 | UI-B | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
 
@@ -446,7 +446,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 - Force or replace flags, and `resume`.
 
 ## Definition of done
-- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. Owner decisions 1–6 are recorded as approved or declined, and the merged engine matches them.
+- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved).
 - [ ] The browser performs every visuals action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
 - [ ] Network requests go only to hosts the reviewer confirmed for that exact acquisition. The confirmation is bound to the engine's canonical preview (`preview_sha256`), checked by the backend and by the engine (`preview_mismatch` at both), and invalidated by any parameter or revision change. With `YTA_VISUALS_NETWORK=false` there are none. No paid call is possible from the UI.
 - [ ] Image integrity holds end to end:
