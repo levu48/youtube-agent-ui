@@ -95,6 +95,7 @@ async def system_config(s: State) -> SystemConfig:
         default_model=s.settings.default_model,
         providers=providers,
         research_network=s.settings.research_network,
+        visuals_network=s.settings.visuals_network,
     )
 
 

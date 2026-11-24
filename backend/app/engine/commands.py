@@ -51,6 +51,10 @@ class EngineOp(StrEnum):
     RESEARCH_APPROVE = "research-approve"
     RESEARCH_APPLY = "research-apply"
     RESEARCH_EXPORT = "research-export"
+    VISUALS_STATE = "visuals-state"
+    VISUALS_PLAN = "visuals-plan"
+    VISUALS_ACQUIRE = "visuals-acquire"
+    VISUALS_IMPORT = "visuals-import"
 
 
 class ArgumentError(ValueError):
@@ -447,8 +451,145 @@ def research_export_args(root: Path, *, expect_revision: str) -> list[str]:
     return [EngineOp.RESEARCH_EXPORT.value, _root(root), _revision(expect_revision), "--json"]
 
 
+# ---------------------------------------------------------------------- visuals (M4, D-122)
+
+# Scene IDs are the draft's (``scene-001`` from drafting; any non-empty ID in a hand-edited
+# storyboard): accepted when they are a safe single token.
+SCENE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+# Engine candidate IDs: ``<scene>-cm|gen|imp-<10 hex>`` (search, generated, imported).
+CANDIDATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}-(?:cm|gen|imp)-[0-9a-f]{10}$")
+ASSET_ID_RE = re.compile(r"^img-[0-9a-f]{16}$")
+VISUALS_SEARCH_PROVIDERS = ("wikimedia", "fixture")
+IMPORT_KINDS = ("archival", "document", "chart", "generated")
+MAX_CANDIDATES_PER_SCENE = (1, 20)
+# Engine limits (visuals_import, D-122) and this UI's own bounds for one argv element.
+IMPORT_FIELDS = {
+    "title": (1, 200, True),
+    "provenance": (10, 2000, True),
+    "source_url": (9, MAX_URL, False),
+    "creator": (1, 300, False),
+    "license_name": (1, 200, False),
+    "license_url": (9, MAX_URL, False),
+    "attribution": (1, 1000, False),
+}
+
+
+def _scene_ids(scene_ids: list[str]) -> list[str]:
+    out = []
+    for sid in dict.fromkeys(scene_ids):
+        if not isinstance(sid, str) or not SCENE_ID_RE.fullmatch(sid):
+            raise ArgumentError(f"not a scene id: {sid!r}")
+        out.append(sid)
+    if len(out) > 500:
+        raise ArgumentError("too many scenes")
+    return out
+
+
+def visuals_state_args(root: Path) -> list[str]:
+    """The engine's read-only visuals snapshot (D-122): writes nothing, recovers nothing."""
+    return [EngineOp.VISUALS_STATE.value, _root(root), "--json"]
+
+
+def visuals_plan_args(root: Path, *, expect_revision: str) -> list[str]:
+    """One planned visual per scene. Never ``--replace-plan``: a hand-edited plan is kept."""
+    return [EngineOp.VISUALS_PLAN.value, _root(root), _revision(expect_revision), "--json"]
+
+
+def visuals_acquire_args(
+    root: Path,
+    *,
+    expect_revision: str,
+    search_provider: str,
+    scene_ids: list[str],
+    max_candidates_per_scene: int,
+    dry_run: bool = False,
+    expect_preview: str | None = None,
+    allow_hosts: list[str] | None = None,
+) -> list[str]:
+    """Image search only (``--image-provider=none``: never generation, never paid), never
+    ``--force``. A real run is bound to the preview the reviewer confirmed: the engine
+    recomputes it and refuses (``preview_mismatch``) unless its hash and the hosts match."""
+    if search_provider not in VISUALS_SEARCH_PROVIDERS:
+        raise ArgumentError("search provider must be wikimedia or fixture")
+    lo, hi = MAX_CANDIDATES_PER_SCENE
+    n = max_candidates_per_scene
+    if isinstance(n, bool) or not isinstance(n, int) or not lo <= n <= hi:
+        raise ArgumentError(f"max_candidates_per_scene must be an integer {lo}-{hi}")
+    argv = [
+        EngineOp.VISUALS_ACQUIRE.value,
+        _root(root),
+        f"--search-provider={search_provider}",
+        "--image-provider=none",
+    ]
+    argv += [f"--scene={sid}" for sid in _scene_ids(scene_ids)]
+    argv.append(f"--max-candidates-per-scene={n}")
+    if dry_run:
+        if expect_preview is not None or allow_hosts:
+            raise ArgumentError("a dry run takes no preview binding")
+        return [*argv, "--dry-run", _revision(expect_revision), "--json"]
+    if not isinstance(expect_preview, str) or not REVISION_RE.fullmatch(expect_preview):
+        raise ArgumentError("expect_preview must be the 64-character preview hash")
+    hosts = list(dict.fromkeys(allow_hosts or []))
+    if not hosts:
+        raise ArgumentError("a run needs the confirmed hosts")
+    argv.append(f"--expect-preview={expect_preview}")
+    argv += [f"--allow-host={check_host(h)}" for h in hosts]
+    return [*argv, _revision(expect_revision), "--json"]
+
+
+def visuals_import_args(root: Path, *, expect_revision: str, scene_id: str, kind: str,
+                        **fields: str | None) -> list[str]:  # fmt: skip
+    """Add an image the reviewer owns or has cleared. The bytes go on stdin (``--stdin``),
+    never a path; provenance travels as separate argv elements."""
+    if not isinstance(scene_id, str) or not SCENE_ID_RE.fullmatch(scene_id):
+        raise ArgumentError("not a scene id")
+    if kind not in IMPORT_KINDS:
+        raise ArgumentError(f"kind must be one of {', '.join(IMPORT_KINDS)}")
+    unknown = set(fields) - set(IMPORT_FIELDS)
+    if unknown:
+        raise ArgumentError(f"unknown import fields: {sorted(unknown)}")
+    argv = [
+        EngineOp.VISUALS_IMPORT.value,
+        _root(root),
+        f"--scene={scene_id}",
+        "--stdin",
+        f"--kind={kind}",
+    ]
+    for name, (lo, hi, required) in IMPORT_FIELDS.items():
+        value = fields.get(name)
+        if value is None or value == "":
+            if required:
+                raise ArgumentError(f"{name} is required")
+            continue
+        if (
+            not isinstance(value, str)
+            or _CONTROL_RE.search(value)
+            or any(ch in value for ch in "\r\n\t")
+            or not lo <= len(value) <= hi
+        ):
+            raise ArgumentError(f"{name} must be {lo}-{hi} characters on one line")
+        if name in ("source_url", "license_url"):
+            url_host(value)
+        argv.append(f"--{name.replace('_', '-')}={value}")
+    return [*argv, _revision(expect_revision), "--json"]
+
+
 ALLOWED_SUBCOMMANDS = frozenset(op.value for op in EngineOp if op is not EngineOp.VERSION)
-FORBIDDEN_FLAGS = ("--force", "--replace-edits", "--replace-output", "--replace-plan", "--section")
+FORBIDDEN_FLAGS = (
+    "--force",
+    "--replace-edits",
+    "--replace-output",
+    "--replace-plan",
+    "--replace-shots",
+    "--replace-assets",
+    "--allow-paid",
+    "--max-spend-usd",
+    "--max-generated",
+    "--file",
+    "--section",
+)
+# Flags whose value is fixed in this UI: no generation provider, ever.
+FIXED_VALUES = {"--image-provider": "none"}
 
 
 def assert_allowlisted(argv: list[str]) -> None:
@@ -460,8 +601,10 @@ def assert_allowlisted(argv: list[str]) -> None:
     for a in argv[1:]:
         if not a.startswith("--"):
             raise ArgumentError("positional engine arguments are not allowed")
-        flag = a.split("=", 1)[0]
+        flag, _, value = a.partition("=")
         if flag in FORBIDDEN_FLAGS:
             raise ArgumentError(f"{flag} is not allowed in this UI")
+        if flag in FIXED_VALUES and value != FIXED_VALUES[flag]:
+            raise ArgumentError(f"{flag} must be {FIXED_VALUES[flag]} in this UI")
         if "\x00" in a:
             raise ArgumentError("NUL in argument")

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.research_routes import router as research_router
 from app.api.routes import router
+from app.api.visuals_routes import router as visuals_router
 from app.config import Settings
 from app.engine.runner import EngineCLI
 from app.errors import install_handlers
@@ -57,6 +58,7 @@ def create_app(settings: Settings | None = None, *, cli: EngineCLI | None = None
     )
     app.include_router(router)
     app.include_router(research_router)
+    app.include_router(visuals_router)
     return app
 
 

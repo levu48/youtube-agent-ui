@@ -400,6 +400,10 @@ def main() -> int:
         return 0
     if cmd == "draft-edit" and os.environ.get("FAKE_REVISION") == "1":
         return _draft_edit(root, o, mode)
+    if cmd.startswith("visuals-"):
+        import fake_visuals  # the fake's visuals commands (engine D-122)
+
+        return fake_visuals.main(cmd, root, o, argv)
     if cmd.startswith(("research-", "narration-")):
         import fake_research  # the fake's research commands (engine D-118)
 
