@@ -152,7 +152,7 @@ export function CandidateGallery({
                   // eslint-disable-next-line @next/next/no-img-element -- verified bytes from the backend, by hash
                   <img src={url} alt={altText(c, brief)} loading="lazy" className="max-h-full object-contain" onError={() => onImageError(url)} />
                 ) : (
-                  <span className="px-2 text-center text-xs text-muted-foreground">
+                  <span className="px-2 text-center text-xs text-slate-700">
                     {view.catalog_trusted ? "No stored image" : "Catalogue not trusted: not shown"}
                   </span>
                 )}

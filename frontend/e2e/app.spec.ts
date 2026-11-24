@@ -1,5 +1,6 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -9,8 +10,11 @@ const IDEA = "Hồ Chí Minh: Nationalist or Communist?";
 const ENGINE = process.env.E2E_ENGINE ?? "auto";
 
 async function axe(page: Page) {
-  // Let data-dependent UI render first so the scan is deterministic.
+  // Let data-dependent UI render first so the scan is deterministic, and let transitions
+  // finish (a button that just became enabled fades from 50% opacity): a half-faded frame has
+  // colours the page never settles on.
   await page.waitForLoadState("networkidle");
+  await animationsDone(page.locator("body"));
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(
@@ -676,6 +680,108 @@ test("G2: validate, approve the validated revision, apply, approve G1 again, exp
   await axe(page);
 });
 
+/** A valid solid-colour RGB PNG (the engine needs at least 480x270 for an import). */
+function png(width: number, height: number, rgb: [number, number, number]): Buffer {
+  const chunk = (kind: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(kind, "latin1"), data]);
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: width }, () => rgb).flat())]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.concat(Array.from({ length: height }, () => row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+test("visuals: plan, a search bound to the engine preview, the gallery, an import", async ({ page }) => {
+  test.setTimeout(240_000);
+  const api = await backend(page);
+  const slug = "visuals-demo";
+  const p = `/projects/${slug}`;
+  await api.post("/projects", { slug, idea: "Bến cảng Sài Gòn đầu thế kỷ 20", language: "vi", duration_seconds: 180 });
+  await api.job(`${p}/draft-jobs`, { provider: "fixture" });
+  const { review_token } = await api.get(`${p}/draft`);
+  await api.post(`${p}/draft/approve`, { reviewer: "Nguyễn Văn A", confirm: true, review_token });
+
+  // The project page and the sidebar lead to the visuals workspace.
+  await page.goto(p);
+  await page.getByRole("link", { name: "Visuals" }).first().click();
+  await page.waitForURL(/\/visuals$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Visuals" })).toBeVisible();
+  await expect(page.getByText("G1 approved")).toBeVisible();
+  await expect(page.getByText("No visual plan yet")).toBeVisible();
+  await axe(page);
+
+  await page.getByRole("button", { name: /Plan visuals/ }).click();
+  await expect(page.getByText("Visual plan written").first()).toBeVisible({ timeout: 60_000 });
+  const search = page.getByRole("button", { name: /^Search test images/ });
+  await expect(search).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByText("No images yet").first()).toBeVisible();
+  await axe(page);
+
+  // Nothing is contacted before the exact preview is confirmed.
+  await search.click();
+  const dialog = page.getByRole("dialog", { name: "Search for images" });
+  const start = dialog.getByRole("button", { name: /Start search/ });
+  await expect(start).toBeDisabled();
+  await dialog.getByRole("button", { name: /Check what would be searched/ }).click();
+  const hosts = dialog.getByRole("list", { name: "Hosts that may be contacted" });
+  await expect(hosts.getByRole("listitem")).toHaveText(["commons.fixture.invalid", "upload.fixture.invalid"]);
+  await dialog.getByRole("checkbox", { name: /I confirm this search/ }).check();
+  await settled(dialog);
+  await axe(page);
+  await start.click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Image search finished").first()).toBeVisible({ timeout: 90_000 });
+
+  // The gallery shows the engine's stored images, served by hash, with their labels.
+  const scene1 = page.getByRole("list", { name: "Candidates for scene-001" });
+  const first = scene1.getByRole("img").first();
+  await expect(first).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => first.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+  expect(await first.getAttribute("src")).toMatch(/\/visuals\/candidates\/[^/]+\/image\?sha256=[0-9a-f]{64}$/);
+  await expect(scene1.getByText("Test image: never publishable").first()).toBeVisible();
+  await axe(page);
+  await scene1.getByRole("button", { name: /View larger/ }).first().click();
+  const large = page.getByRole("dialog").filter({ hasText: "verified against its recorded hash" });
+  await settled(large);
+  await axe(page);
+  await page.keyboard.press("Escape");
+  await expect(large).toBeHidden();
+
+  // Import an image the reviewer owns: a manual_review candidate, never cleared automatically.
+  await page.getByRole("button", { name: "Import an image for scene-001…" }).click();
+  const imp = page.getByRole("dialog", { name: "Import an image" });
+  await imp.getByLabel(/Image file/).setInputFiles({ name: "ben-cang.png", mimeType: "image/png", buffer: png(640, 360, [30, 90, 160]) });
+  await imp.getByLabel(/Provenance/).fill("Ảnh tôi tự chụp năm 2024, dùng cho dự án này.");
+  await imp.getByLabel("Creator").fill("Nguyễn Văn A");
+  await settled(imp);
+  await axe(page);
+  await imp.getByRole("button", { name: /Import image/ }).click();
+  await expect(imp).toBeHidden({ timeout: 30_000 });
+  const imported = scene1.getByRole("listitem").filter({ hasText: "Imported by you" });
+  await expect(imported).toBeVisible();
+  await expect(imported.getByText("Needs a human rights review")).toBeVisible();
+  await expect.poll(() => imported.getByRole("img").evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
+
+  await page.getByRole("tab", { name: "Applied images" }).click();
+  await expect(page.getByText("The draft shows no applied images yet.")).toBeVisible();
+  await axe(page);
+  await page.getByRole("tab", { name: "Engine report" }).click();
+  await expect(page.getByText(/every fact on this page comes from this one engine read/)).toBeVisible();
+  await axe(page);
+});
+
 test("unknown project and missing draft states", async ({ page }) => {
   await page.goto("/projects/does-not-exist");
   await expect(page.getByText("Project not found")).toBeVisible();
@@ -727,7 +833,7 @@ for (const [name, width, height] of [
 ] as const) {
   test(`responsive layout at ${name} (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height });
-    for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft"]) {
+    for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft", "/projects/visuals-demo/visuals"]) {
       await page.goto(path);
       await expect(page.locator("h1").first()).toBeVisible();
       await page.waitForLoadState("networkidle");
@@ -745,7 +851,7 @@ test("200% zoom and reduced motion keep core flows usable", async ({ page }) => 
   await page.emulateMedia({ reducedMotion: "reduce" });
   // 200% zoom of a 1280px window is equivalent to a 640px CSS viewport.
   await page.setViewportSize({ width: 640, height: 450 });
-  for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft"]) {
+  for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft", "/projects/visuals-demo/visuals"]) {
     await page.goto(path);
     await expect(page.locator("h1").first()).toBeVisible();
     await page.waitForLoadState("networkidle");

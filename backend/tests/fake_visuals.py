@@ -324,7 +324,10 @@ def _plan(root: Path, o: dict) -> int:
                 "scene_id": s["id"],
                 "section_id": s.get("outline_section_id"),
                 "desired_kind": "chart" if n == 2 else "illustration",
-                "brief": s.get("visual_brief") or f"Visual for {s['id']}.",
+                # The draft's visual_brief is an object; the engine's plan brief is its text.
+                "brief": (s.get("visual_brief") or {}).get("description")
+                if isinstance(s.get("visual_brief"), dict)
+                else f"Visual for {s['id']}.",
                 "search_query": f"test query {n + 1}",
                 "search_enabled": n != 2,
                 "generation_enabled": False,

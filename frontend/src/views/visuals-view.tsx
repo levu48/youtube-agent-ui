@@ -31,6 +31,9 @@ const TABS: { id: Tab; label: string }[] = [
 
 const G1_CURRENT = new Set(["approved", "stale_after_apply"]);
 
+/** Engine text, rendered only when it is text: a malformed record never breaks the page. */
+const text = (v: unknown): string | null => (typeof v === "string" ? v : null);
+
 export function VisualsView() {
   const { projectId } = useParams<{ projectId: string }>();
   const qc = useQueryClient();
@@ -285,15 +288,15 @@ function ScenesTab({
             {p ? (
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
                 <dt className="text-muted-foreground">Brief</dt>
-                <dd lang={lang}>{p.brief}</dd>
+                <dd lang={lang}>{text(p.brief) ?? "—"}</dd>
                 <dt className="text-muted-foreground">Search</dt>
-                <dd>{p.search_enabled ? (p.search_query ?? "—") : "Off for this scene"}</dd>
+                <dd>{p.search_enabled ? (text(p.search_query) ?? "—") : "Off for this scene"}</dd>
                 {r ? (
                   <>
                     <dt className="text-muted-foreground">Engine</dt>
                     <dd>
-                      {humanize(r.disposition)}
-                      {r.messages.length ? ` · ${r.messages.join("; ")}` : ""}
+                      {humanize(String(r.disposition))}
+                      {r.messages?.length ? ` · ${r.messages.map(String).join("; ")}` : ""}
                     </dd>
                   </>
                 ) : null}
@@ -303,7 +306,7 @@ function ScenesTab({
                 <dd>{s.draft_shots.length ? `${s.draft_shots.length} shot(s)` : "No shots"}</dd>
               </dl>
             ) : null}
-            <CandidateGallery view={view} projectId={projectId} sceneId={s.scene_id} brief={p?.brief} onImageError={onImageError} />
+            <CandidateGallery view={view} projectId={projectId} sceneId={s.scene_id} brief={text(p?.brief) ?? undefined} onImageError={onImageError} />
             <Button size="sm" variant="outline" onClick={() => onImport(s.scene_id)} disabled={Boolean(block)}>
               <FileUp aria-hidden /> Import an image for {s.scene_id}…
             </Button>

@@ -295,6 +295,38 @@ Implemented in UI-C against engine `fb6bffc`. Every write holds the project (`40
 - `invalid_input` (for example a placeholder reviewer) → `422 invalid_edit`.
 - Request validation (no `confirm`, nulls, unknown fields) → `422 validation_error`, before any engine run.
 
+## Milestone 4, UI-A: visuals reads, images, plan, search and import (implemented)
+
+Implemented in UI-A against engine `65c5f52` (V1, D-122). Selection, clearances, plan narrowing and apply are UI-B (they need engine V2). Every mutation needs CSRF and origin and carries the visuals `expected_revision` the page loaded.
+
+| Method and path | Engine command | Body | Response and errors |
+|---|---|---|---|
+| `GET /projects/{id}/visuals` | `visuals-state --json` (one run per request) | none | the engine snapshot as it prints it (`scheme`, `revision`, `inputs`, `evidence_inputs`, `pending_journals`, `recovery_required`, `catalog_trusted`, `catalog_problems`, `plan`, `candidates`, `selection`, `applied`, `integrity`, `scenes` with `apply_state`, `assets`, `report`, `gates {g1, g3}`), plus `narration {scene_id: text}` (only from the storyboard bytes the snapshot names), `network {enabled, search_provider}`, `editing {supported: false, reason}` and `active_job_id`. `503 state_unavailable` if the engine cannot produce it; `502 engine_unsupported` for an engine before D-122 |
+| `GET /projects/{id}/visuals/candidates/{candidate_id}/image?sha256=H` | read, verified | none | the image bytes. `400 invalid_input` (no or malformed `sha256`, malformed ID); `404 not_found`; `409 catalog_untrusted`; `409 image_changed` with `details.current_sha256`; `409 image_integrity`; `503 state_unavailable` |
+| `GET /projects/{id}/visuals/assets/{asset_id}/image?sha256=H` | read, verified | none | as above, for an asset whose record is the one `visuals-apply` wrote (`record_intact`), otherwise `409 image_integrity` |
+| `POST /projects/{id}/visuals/plan` | `visuals-plan --expect-revision=R --json` (never `--replace-plan`) | `expected_revision` | `202` job `visuals-plan` |
+| `POST /projects/{id}/visuals/acquire/preview` | `visuals-acquire --search-provider=… --image-provider=none [--scene=…] --max-candidates-per-scene=N --dry-run --expect-revision=R --json` | `expected_revision`, `scene_ids` (empty: every planned scene), `max_candidates_per_scene` (1–20, default 4) | `{preview, preview_sha256}`, the engine's canonical preview. Nothing is contacted or written |
+| `POST /projects/{id}/visuals/acquire` | as the preview without `--dry-run`, plus `--expect-preview=H --allow-host=…` | as preview, plus `network: true`, `preview_sha256`, `allow_hosts` | `202` job `visuals-acquire`. The backend runs the preview again first: another hash or host set is `409 preview_mismatch` with `details {checked_by: "backend", preview, preview_sha256}` |
+| `POST /projects/{id}/visuals/import` | `visuals-import --scene=… --stdin --title=… --kind=… --provenance=… [--source-url --creator --license-name --license-url --attribution] --expect-revision=R --json`, bytes on stdin | `multipart/form-data`: `expected_revision`, `scene_id`, `kind` (`archival`, `document`, `chart`, `generated`), `provenance` (10–2000), optional `title` (default: the file name), `source_url` and `license_url` (https), `creator`, `license_name`, `attribution`; then the `file` part, last | `{result {candidate_id, scene_id, sha256, width, height, rights_status, warnings, revision}, visuals}` |
+
+**Order and limits of an import.** The project is held, then the text fields are validated and the revision and pending recovery are checked against the current snapshot as soon as the `file` part starts, before its bytes are read (`409 revision_conflict` / `recovery_required`). The file is read in memory only (at most 20 MB, `413 too_large`), must be JPEG, PNG, WebP or TIFF by its first bytes (`422 invalid_input`), and goes to the engine on stdin. A part after the file, a repeated field or an unknown field is `422`. Not multipart is `415`. The engine also needs at least 480×270 pixels.
+
+**Snapshot freshness.** The backend keeps the latest `visuals-state` per project. Before it authorises an image or a write, every file in `inputs` and `evidence_inputs` is hashed again (keyed by its stat identity; opened one component at a time without following symlinks; an evidence URL is never fetched and counts as `null`). Any difference runs `visuals-state` again, one run per project at a time. Every write and every job end discards it.
+
+**Pending recovery.** When the current snapshot has `recovery_required: true`, plan, preview, acquire and import are refused with `409 recovery_required`, `details {checked_by: "backend", journals: [{stage, code, detail, next_action}]}`, before any engine command. Reads and images continue.
+
+**Engine refusals** (writes, the preview, and job outcomes):
+- `revision_mismatch` → `409 revision_conflict`, with `details.current_revision`;
+- `recovery_required` → `409 recovery_required`, `details {checked_by: "engine", journals}`;
+- `preview_mismatch` → `409 preview_mismatch`, `details {checked_by: "engine", preview_sha256, hosts}`;
+- `catalog_untrusted`, `image_integrity` (with `candidate_ids`, `asset_ids`, `paths`), `g1_not_current`, `not_ready`, `human_edit_conflict` → `409` with the same code;
+- `invalid_input`, and the generic `error` exit 3 for undecodable import bytes → `422 visuals_refused`;
+- `concurrency` (exit 9) → `409 engine_conflict`.
+
+A failed job reports the engine's JSON error code when it printed one (`revision_mismatch`, `preview_mismatch`, `recovery_required`, `partial_acquire_failure` exit 13, `g1_not_current`, `catalog_untrusted`) as its `error_code`, with a fixed message, instead of the exit code's summary. This applies to research jobs too. `YTA_VISUALS_NETWORK=false` refuses the preview and the search with `403 network_disabled` and runs no engine command; imports still work.
+
+**Image responses.** `Content-Type` from the verified magic (`image/png` or `image/jpeg`), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Content-Disposition: inline`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "H"`. Errors are `Cache-Control: no-store`. The bytes sent are the bytes hashed.
+
 ## Milestone 3 (proposed): research and G2
 
 **Status: proposed, now implemented.** UI-A, UI-B and UI-C implemented the rows above; this table is kept as the original proposal. The endpoints need the engine additions E1–E3 ([milestone-3.md](milestones/milestone-3.md#critical-dependency--engine-capabilities-e1-e2-e3)). The UI never writes engine files: every mutation is one allowlisted engine command, and every mutation carries the `expected_revision` from `GET …/research` (the engine's `research-check --json` `revision`). The common rules match M2: CSRF and origin on mutations, the project held during the call (`409 job_conflict` / `project_busy`), and no absolute paths in responses.

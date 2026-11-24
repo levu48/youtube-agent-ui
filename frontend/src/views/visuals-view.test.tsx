@@ -303,3 +303,12 @@ describe("visuals workspace", () => {
     expect(screen.queryByRole("link", { name: "Visuals" })).not.toBeInTheDocument();
   });
 });
+
+describe("malformed engine records", () => {
+  it("never renders a non-text value from the plan", async () => {
+    const v = view();
+    (v.plan!.scenes[0] as unknown as { brief: unknown }).brief = { description: "x", suggested_kind: "photo" };
+    setup({}, v);
+    expect(await screen.findByRole("heading", { name: "scene-001" })).toBeInTheDocument();
+  });
+});

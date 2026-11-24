@@ -31,7 +31,7 @@ export function AssetFacts({
                 // eslint-disable-next-line @next/next/no-img-element -- verified bytes from the backend, by hash
                 <img src={url} alt={`Applied image ${a.asset_id}, shown in ${a.scene_ids.join(", ")}`} className="max-h-24 object-contain" onError={() => onImageError(url)} />
               ) : (
-                <span className="px-1 text-center text-xs text-muted-foreground">No verified image to show</span>
+                <span className="px-1 text-center text-xs text-slate-700">No verified image to show</span>
               )}
             </div>
             <div className="min-w-0 space-y-1">

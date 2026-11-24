@@ -272,6 +272,20 @@ Checked against the CLI, the source (`agents/research.py`, `research/checks.py`,
 - **Shared bytes.** Apply refuses with `not_ready` (exit 2) when one asset would get two different rights records, including against an asset still shown by a scene it leaves unselected (`_retained_conflicts`, `agents/visuals.py:1791`). `--replace-assets` does not bypass it.
 - **Decision numbers.** Narrate-text is D-121 and the visuals contract is D-122 (`docs/decisions.md` in the engine).
 
+### Verified at `65c5f52` (UI-A, 2026-11-24)
+
+Checked by the real-engine integration test `test_visuals_workspace_with_real_engine` (fixture search provider, offline) and the real-engine E2E journey.
+
+- **Snapshot inputs.** `visuals-state` `inputs` lists the draft files (`input.json`, `outline.json`, `outline.md`, `script.json`, `script.md`, `storyboard.draft.json`, `review.json`, `assets.json`, `research-plan.json`), the visuals files and the three journal manifests, each with its SHA-256 or `null`. The backend re-hashes exactly these, plus `evidence_inputs`, to decide whether its kept snapshot is current.
+- **Fixture search.** `--search-provider=fixture` returns placeholder Commons candidates (`placeholder: true`, `rights.status: accepted`) whose stored images are JPEG (1600×900) or PNG, under `render/visuals/candidates/<sha256>.<jpg|png>`. The backend serves them after hashing the bytes and reading the JPEG SOF or PNG IHDR header.
+- **Plan.** A chart scene has search off (`search_enabled: false`) and `requires_manual_asset: true`, so the preview has no query for it.
+- **Import.**
+  - The engine needs at least **480×270** pixels ("image is 320x180; at least 480x270 is required", `invalid_input`, exit 2).
+  - Bytes with a PNG signature that do not decode are refused (exit 2 or 3); the backend maps both to `422 visuals_refused` with the engine's message.
+  - A valid import is a `manual_review` candidate `<scene>-imp-<10 hex>`, stored re-encoded, and served like any candidate.
+- **Recovery.** A `pending` entry in `render/llm/manifest.json` makes `visuals-state` report `recovery_required: true` and a `recovery_required` finding (stage `draft`), and the backend refuses the preview with `checked_by: backend` before running the engine.
+- **CLI interoperability.** After the UI's plan, search and import, `ytagent visuals-state --json` from the CLI reports the same revision as the UI.
+
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
 **Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.

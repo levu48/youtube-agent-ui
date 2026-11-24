@@ -34,6 +34,8 @@ const backendEnv = {
   YTA_ALLOW_FIXTURE_PROVIDER: "true",
   // Research: offline test pages (.fixture.invalid) instead of Wikipedia.
   YTA_RESEARCH_SEARCH_PROVIDER: "fixture",
+  // Visuals: offline placeholder images (.fixture.invalid) instead of Wikimedia Commons.
+  YTA_VISUALS_SEARCH_PROVIDER: "fixture",
   YTA_OLLAMA_BASE_URL: "http://127.0.0.1:9",
   YTA_UI_ORIGINS: JSON.stringify([`http://127.0.0.1:${FRONTEND_PORT}`, `http://localhost:${FRONTEND_PORT}`]),
 };

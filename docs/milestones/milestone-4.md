@@ -2,6 +2,7 @@
 
 **Status:** specification; owner decisions approved 2026-11-23. The engine needs two prerequisite PRs (V1, V2) before the UI can drive this stage.
 - **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
+- **UI-A is implemented** on branch `feat/m4-ui-a` (draft PR): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
 - **V2 is not started.**
 - The baseline sections ("Existing baseline", "Selection, apply, rights and G3 at `fb6bffc`") describe the engine before V1. They were verified read-only at `fb6bffc`, and V1 changes none of their gate or rights policy.
 
@@ -492,7 +493,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 | UI-0 | UI | none | this specification and the roadmap | review |
 | V1 (**merged**, PR #16, `65c5f52`) | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot, journal manifests included: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions, `pending_journals` and `recovery_required`); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical, read-only acquisition preview (refusing `recovery_required`) with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
 | V2 | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
-| UI-A | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
+| UI-A (**implemented**, branch `feat/m4-ui-a`) | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
 | UI-B | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
 
 ## Non-goals
