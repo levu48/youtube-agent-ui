@@ -1,6 +1,6 @@
 # Milestone 4 — Visuals: Plan, Candidate Gallery, Rights and Selection (G3)
 
-**Status:** specification; owner decisions approved 2026-11-23. The engine needs prerequisite PRs (V1, V2) before the UI can drive this stage; V1 is in progress. Engine facts below were verified read-only at engine `main` `fb6bffc` (the pinned `ENGINE_REF`), including an offline probe with the fixture and mock providers.
+**Status:** specification; owner decisions approved 2026-11-23. The engine needs prerequisite PRs (V1, V2) before the UI can drive this stage; V1 is implemented on engine branch `feat/visuals-cli-contract` (decision D-121), and this document matches it. Engine facts below were verified read-only at engine `main` `fb6bffc` (the pinned `ENGINE_REF`), including an offline probe with the fixture and mock providers.
 
 **Goal:** a reviewer can choose one or more images for every scene of an approved draft in the browser, see each image's licence evidence, record rights clearances where a licence cannot be verified automatically, and apply the selection to the draft, with the `youtube-agent` engine as the only authority. This covers:
 - the visual plan (one planned visual per scene, with its kind and search query);
@@ -96,7 +96,10 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
     - the evaluation (the `VisualReport` fields);
     - `integrity` for every **selected**, **cleared** or **applied** candidate (`ok | missing | mismatch`, from `blob_ok`);
     - per scene, `apply_state` (below) and `draft_shots`;
-    - per asset shown by the draft, `{asset_id, scene_ids, candidate_id|null, problem, credit_problems, fixture, rights_current, rights_reason}`. `problem` and `credit_problems` come from the existing `asset_problem` and `credit_problems`, the same functions release uses, applied to the **draft's** shots so they are visible before export. `rights_current` recomputes `_rights_decision` for the asset's candidate (matched by `sha256`) with the **current** catalogue and clearances; `rights_reason` is `clearance_revoked | clearance_invalid | rights_changed | candidate_missing | null`;
+    - per asset shown by the draft, `{asset_id, scene_ids, candidate_id|null, sha256, local_path, image, record_intact, problem, credit_problems, fixture, rights_current, rights_reason}`:
+      - `problem` and `credit_problems` come from the existing `asset_problem` and `credit_problems`, and `fixture` from the release fixture-media rule (factored out as `fixture_media`). These are the functions release uses, applied to the **draft's** shots so they are visible before export;
+      - `image` (`ok | missing | mismatch`) checks the bytes against the content address in the file name, and `record_intact` checks the record against `applied.json`. Both are independent of rights, because `asset_problem` stops at its first finding: an unverified asset's corrupted bytes would otherwise be hidden behind "rights not verified";
+      - `rights_current` recomputes `_rights_decision` for the asset's candidate (matched by `sha256`) with the **current** catalogue and clearances; `rights_reason` is `not_verified | clearance_revoked | clearance_invalid | rights_changed | candidate_missing | null` (`not_verified`: applied without verified rights, as mock and fixture images always are);
     - `gates`: `g1` (`gates.editorial` status) and `g3` (`gates.visuals` status and findings), computed from the same snapshot. Nothing new is computed for G3; it is the existing function.
 - **`apply_state` per scene**, computed by the engine from the snapshot. Apply's shot construction is factored out, so "what apply would write" is the same code:
 
@@ -110,15 +113,15 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
   | `draft_edited` | the draft's shots match neither (hand-edited; apply would report `human_edit_conflict`) |
 
   Validation is not a stored state: it is the evaluation at a revision (per-scene `render_ready`, errors, unpublishable).
-- **Visuals revision** (`scheme: m4-visuals-revision-1`). SHA-256 of the canonical JSON `{"files": {rel: sha256|null}, "draft_revision": R|null, "scheme": "m4-visuals-revision-1"}`, serialised with sorted keys, no whitespace, UTF-8, `ensure_ascii=false`.
-  - The files are `visual-plan.json`, `visual-selection.json`, `render/visuals/candidates.json`, `render/visuals/provenance.json`, `render/visuals/manifest.json`, `render/visuals/applied.json`, `assets.json` and, after V2, `render/visuals/clearance-history.json`.
-  - `draft_revision` is the `draft-check` revision (D-117), so a draft edit, a `research-apply` or a G1 change invalidates in-flight visuals work (owner decision 1).
+- **Visuals revision** (`scheme: m4-visuals-revision-1`). SHA-256 of the canonical JSON `{"draft_revision": R, "files": {rel: sha256|null}, "scheme": "m4-visuals-revision-1"}`, serialised like the engine's other revisions (`sha256_json`: sorted keys, compact separators, ASCII escapes).
+  - The files are `visual-plan.json`, `visual-selection.json`, `render/visuals/candidates.json`, `render/visuals/provenance.json`, `render/visuals/manifest.json`, `render/visuals/applied.json`, `assets.json`, `render/visuals/clearance-history.json` (null until V2 writes it, listed now so the scheme does not change then) and `review.json`.
+  - `draft_revision` is the `draft-check` revision (D-117), so a draft edit or a `research-apply` invalidates in-flight visuals work (owner decision 1). The draft revision does not cover `review.json`, so it is in `files`: a G1 change invalidates it too.
   - Report files and contact sheets are excluded (outputs), and so are image bytes (see Integrity).
-- **`--json` and the JSON error envelope** (`{ok:false, error:{code, exit_code, message, details?}}`) on `visuals-plan`, `visuals-acquire`, `visuals-import`, `visuals-check` and `visuals-apply`, with the stable codes in the Error codes table.
+- **`--json` and the JSON error envelope** (`{ok:false, error:{code, exit_code, message, details?}}`) on `visuals-plan`, `visuals-acquire`, `visuals-import`, `visuals-apply` and `visuals-state`, with the stable codes in the Error codes table. `visuals-check --json` keeps its report shape (now with `revision` and `image_integrity`), as `research-check` does (D-118). Exit codes are unchanged.
 - **`--expect-revision`** on every visuals mutation, checked under the lock before anything is published. `visuals-acquire` checks it again after the network phase (as research collect does, D-118).
 - **Acquisition preview and binding** (see Network confirmation).
-- **Import from stdin.** `visuals-import --stdin --expect-revision=R` reads the image bytes from standard input. They are size-limited, decoded, hashed and staged exactly like a download, outside the lock. Under the lock, the revision is checked **before** the candidate, catalogue or provenance is published; on a mismatch the staged bytes are discarded and nothing is recorded. No filesystem path crosses the boundary, and the other flags are unchanged.
-- **Apply repairs a missing applied image.** When a shown asset's content-addressed file is missing and its candidate passes `blob_ok`, apply installs it even if the records are unchanged (`status: images_restored`, with the asset IDs). A file with other bytes is still refused, now as `image_integrity` with the path, and is left for the CLI user to resolve: the UI never deletes it.
+- **Import from stdin.** `visuals-import --stdin --title T --expect-revision=R` reads the image bytes from standard input. They are size-limited, decoded, hashed and staged exactly like a download, outside the lock. Under the lock, the revision is checked **before** the candidate, catalogue or provenance is published; on a mismatch the staged bytes are discarded and nothing is recorded. No filesystem path crosses the boundary. `--title` names the image (with `--file` it is the file name); the other flags are unchanged.
+- **Apply repairs a missing applied image.** When a selected asset's content-addressed file is missing and its candidate passes `blob_ok`, apply installs it even if the records are unchanged (`status: images_restored`, with the asset IDs). A file with other bytes (or a symlink) is refused, now as `image_integrity` with the path, instead of apply reporting `already_current`, and is left for the CLI user to resolve: the UI never deletes it.
 - **Progress.** One line per scene searched, downloaded or rejected, on a progress logger.
 
 ### V2 — `visuals-edit`: selection, clearances and plan narrowing
@@ -151,25 +154,26 @@ Image bytes are **not** in the revision, because hashing every candidate on ever
 
 | Where | Check | Failure |
 |---|---|---|
-| `visuals-state` (V1) | `blob_ok` for every selected, cleared or applied candidate, plus `catalog_trusted`; `asset_problem` for every asset the draft shows | per candidate `integrity: ok \| missing \| mismatch`; per asset `problem`; an evaluation error for a selected candidate (G3 `visuals_invalid`, existing) |
+| `visuals-state` (V1) | `blob_ok` for every selected, cleared or applied candidate, plus `catalog_trusted`; for every asset the draft shows, its bytes against its content address, and `asset_problem` | per candidate `integrity: ok \| missing \| mismatch`; per asset `image` and `problem`; an evaluation error for a selected candidate (G3 `visuals_invalid`, existing) |
 | `visuals-edit` `shots.set` / `clearance.set` (V2) | `blob_ok` of each named candidate, under the lock | `image_integrity`; nothing written |
 | `visuals-check` / `visuals-apply` (existing, codes from V1) | `blob_ok` in selection validation; apply re-hashes each candidate image under the lock before installing it; `store_blob` refuses an existing asset file with other bytes | `image_integrity`; nothing published |
-| Release (existing) | `asset_problem` on every asset `storyboard.json` shows | `image_not_releasable` |
+| Release (existing) | `draft-export` needs every shot's image to resolve; then `asset_problem` on every asset `storyboard.json` shows | `export_not_possible` (a corrupted or missing applied image fails the export check first) or `image_not_releasable` |
 | Image endpoint (UI) | the current record's hash equals the URL's `sha256`, and the exact bytes served hash to it (M4-02) | `409 image_changed` or `409 image_integrity`; nothing served |
 
 - **Bytes changed after validation, before apply.** The revision is unchanged, so `--expect-revision` passes. Apply's own re-hash under the lock refuses it, and nothing is published.
 - **A replaced image.** A replacement has a different hash, so it is a different file name and a different catalogue entry, and a clearance bound to the old `candidate_sha256` fails validation.
 - **Changed rights metadata.** This changes `candidates.json` (so the revision changes) and `rights_fingerprint`. A clearance for the old evidence becomes a validation error (G3 `visuals_invalid`), and an applied asset that relied on it gets `rights_current: false, rights_reason: rights_changed`.
-- **An applied image changed or removed while its candidate is intact.** `visuals-state` reports the asset's `problem`, and release refuses it. A missing file is restored by apply (V1). A file with other bytes is refused by apply and left for the CLI user.
+- **An applied image changed or removed while its candidate is intact.** `visuals-state` reports the asset's `image` (`mismatch` or `missing`), and release is blocked (`export_not_possible`). A missing file is restored by apply (V1). A file with other bytes is refused by apply and left for the CLI user.
 - **A hand-edited catalogue** is `catalog_untrusted`: nothing can be selected or cleared until `visuals-acquire` rebuilds it.
 
 ### Network confirmation: the acquisition preview
 - **Preview.** `visuals-acquire --dry-run --json` contacts nothing. It returns the canonical preview `P` and `preview_sha256 = sha256(canonical_json(P))`, serialised as the revision is. `P` contains:
   - `scheme` (`m4-acquire-preview-1`), the engine `project_id`, the visuals `revision`, `search_provider`, and `image_provider` (always `none` from the UI);
-  - the sorted effective `scene_ids`, the `queries` (`[{scene_id, query}]`, as the plan yields them after narrowing), `max_candidates_per_scene`, `timeout` and `concurrency`;
-  - `hosts`: the sorted exact set a run may contact, including media hosts.
+  - the sorted effective `scene_ids`, the `queries` (`[{scene_id, query}]`, as the plan yields them after narrowing), `generate` (scenes that would request a generated image; none from the UI), `max_candidates_per_scene`, `timeout`, `concurrency` and `force` (always false from the UI);
+  - `hosts`: the sorted exact set a run may contact: the fixed HTTPS allowlists of the providers the run would use, including media hosts.
 - **Binding.** `visuals-acquire … --expect-revision=R --expect-preview=H --allow-host=…` recomputes `P` from its current state before any request, and refuses with `preview_mismatch` unless the hash equals `H` and the `--allow-host` set equals `P.hosts`.
-  - Every request and redirect is checked against the allowed hosts (`host_not_allowed`).
+  - `--expect-preview` needs `--allow-host`. `--allow-host` alone narrows every provider's allowlist; it is optional on the CLI, so existing scripts keep working, and the UI always passes it with `--expect-preview`.
+  - Every request and redirect is checked against the allowed hosts. A refused one fails that request, counted as `host_not_allowed` in the run's `failures`; the run then ends as `partial_acquire_failure` with its report.
   - After the network phase, the revision is re-checked under the lock before anything is published (`revision_mismatch`; nothing recorded).
 
 ### Error codes
@@ -184,9 +188,12 @@ One table for the engine contract, the backend and the UI. Each refusal writes n
 | `invalid_patch` | engine (V2) | the patch is malformed, or an operation is refused by policy; `details[{loc, msg, code}]`, including `target_changed` (a clearance's expected hash or fingerprint is not the catalogue's) | `422 invalid_edit` (as M3) |
 | `image_integrity` | engine; backend image endpoint | an image file is missing, a symlink, or has bytes other than its trusted recorded hash; `details.candidate_ids`, `asset_ids` or `path` | `409 image_integrity` |
 | `image_changed` | backend image endpoint only | the URL's `sha256` is not the current record's: the URL is outdated. Not an integrity failure | `409 image_changed`, with `details.current_sha256` (or null) |
-| `human_edit_conflict`, `g1_not_current`, `host_not_allowed`, `concurrency`, `invalid_input`, `not_ready` | engine | as their names say, with the M3 mappings | as M3 |
+| `partial_acquire_failure` | engine | some image requests failed (including `host_not_allowed`); completed scenes were recorded. `details` is the run report, with `failures` by code | none: acquisition is a job, so this is the job's failure (exit 13), shown with its log and report, as M3 shows `partial_search_failure` |
+| `human_edit_conflict`, `g1_not_current`, `concurrency`, `invalid_input`, `not_ready`, `provider_unavailable` | engine | as their names say, with the M3 mappings | as M3 |
 
-Check order inside the engine (the first failure wins): `revision_mismatch` → `catalog_untrusted` → `history_tampered` → `invalid_patch` → `image_integrity`. A tampered or untrusted file therefore never shows as a patch error, and bytes are hashed only for a patch that is otherwise valid.
+Exit codes stay as before D-121: `revision_mismatch`, `preview_mismatch` and `concurrency` 9; `image_integrity`, `catalog_untrusted`, `not_ready` and `invalid_input` 2; `g1_not_current` 12; `partial_acquire_failure` 13.
+
+Check order inside the engine (the first failure wins): `revision_mismatch` → `g1_not_current` → `catalog_untrusted` → `history_tampered` → `invalid_patch` → `image_integrity`. A tampered or untrusted file therefore never shows as a patch error, and bytes are hashed only for a patch that is otherwise valid.
 
 ## Owner decisions (all six approved by the owner on 2026-11-23)
 1. **`draft_revision` in the visuals revision.** Approved: yes. Any draft change, including `research-apply`, then invalidates confirmed acquisitions and open edits. This is the safe choice, at the cost of an occasional "reload".
@@ -302,7 +309,7 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
   | Applied and current | `applied_current` |
   | Changed since the last apply | `changed_since_apply` |
   | Applied image with stale or revoked rights | asset `rights_current: false` and its `rights_reason` |
-  | Applied image missing or modified | asset `problem` (from `asset_problem`) |
+  | Applied image missing or modified | asset `image` (`missing` or `mismatch`), with `problem` (from `asset_problem`) |
 
   The frontend keeps no state machine of its own, and never combines these into a different readiness or gate.
 - **Honesty.**
@@ -374,13 +381,13 @@ So a clearance is recorded only for the exact bytes the reviewer was shown. Sele
   - applied image bytes modified, and removed: asset `problem`; a missing file restored by apply (`images_restored`); a modified one refused (`image_integrity`) and left in place;
   - a candidate image intact while its applied asset image is corrupted: the candidate's `integrity: ok`, the asset's `problem` set;
   - a replacement selection applied, then `draft-approve`: `applied_current`, `rights_current` true, G1 approved, G3 `ready`;
-  - release: after `draft-export`, `production-check --mode release --json` has no `image_not_releasable`, `fixture_image` or `credit_incomplete` for the good case, and has `image_not_releasable` for the corrupted-asset case (and the revoked case with decision 5).
+  - release: after `draft-export`, `production-check --mode release --json` has no `image_not_releasable`, `fixture_image` or `credit_incomplete` for the good case, and is blocked for the corrupted-asset case (`export_not_possible`, as verified in V1), and for the revoked case with decision 5.
 - **Network confirmation** (backend and frontend):
   - after the preview, a change of scenes, of the per-scene limit or of a query (plan narrowing), or a new revision: the confirmation is cleared and the backend refuses with `preview_mismatch`;
   - a change between the backend's check and the engine's: the engine refuses with `preview_mismatch` (`checked_by: engine`);
   - preview answers arriving out of order: the stale one is dropped;
   - the dialog closed and reopened: no confirmation is kept;
-  - a redirect to an unconfirmed host: `host_not_allowed` (fixture provider);
+  - a request or redirect to an unconfirmed host: counted as `host_not_allowed` in a `partial_acquire_failure` (fixture provider);
   - network disabled: `403`, and no engine run;
   - research or visuals state changing during acquisition: `revision_mismatch` after the network phase, nothing recorded;
   - a valid, explicitly confirmed acquisition succeeds.
