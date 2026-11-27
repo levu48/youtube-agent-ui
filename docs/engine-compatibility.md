@@ -60,7 +60,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ## Verified findings (2026-11-20)
 
-**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1. The pin moved to `573ebdd` for Milestone 2, `fb6bffc` for Milestone 3, `65c5f52` for M4 UI-A, and is now `c089089` (engine V2a; see Milestone 4 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
+**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1. The pin moved to `573ebdd` for Milestone 2, `fb6bffc` for Milestone 3, `65c5f52` for M4 UI-A, `c089089` for engine V2a, and is now `26c608f` (engine V2b; see Milestone 4 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
 
 **Invocation.** The UI runs `uv run --no-sync ytagent …` with `cwd=YTA_ENGINE_REPO`. `--no-sync` guarantees the UI never re-syncs/modifies the engine's virtualenv. `PYTHONUNBUFFERED=1` is set so output streams line by line.
 
@@ -288,7 +288,7 @@ Checked by the real-engine integration test `test_visuals_workspace_with_real_en
 
 ## Milestone 4: visuals V2a (engine D-123), verified at `c089089` (2026-11-27)
 
-**Pinned engine:** `ENGINE_REF` is now `c08908916e97b1d0392d55ad4972b758eb00912f`, the merge of `youtube-agent` PR #17 (D-123: `visuals-edit`, the clearance history and the changed-evidence policy, with one review-correction round). This is the minimum engine for M4 UI-B. **V2b** (owner decision 5: G3 requires applied, intact, currently cleared images, and the matching release check) is not started, so G3 keeps its `fb6bffc` meaning at this pin.
+**Pinned engine (for V2a):** `c08908916e97b1d0392d55ad4972b758eb00912f`, the merge of `youtube-agent` PR #17 (D-123: `visuals-edit`, the clearance history and the changed-evidence policy, with one review-correction round). The pin has since moved to `26c608f` (V2b, next section). At `c089089`, G3 still had its `fb6bffc` meaning.
 
 **Required real-engine script.** `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` against a fresh clone at `c089089`: integration 9 tests, 0 skipped, 0 failed; E2E 18 passed, 1 allowed skip (the slow-job cancel test). The UI does not call `visuals-edit` yet, so this shows that M1–M3 and UI-A still work at the new pin.
 
@@ -340,6 +340,40 @@ A narrowing `plan.update` (search off) is `published` with `changed_files: ["vis
 - **Incomplete metadata.** An import cleared *without* creator, licence and source URL stays `rights_verified: false` in `assets.json` after apply, and a later clearance does not change that. The engine requires complete evidence fields for a human attestation (`_rights_decision`, `evidence_complete`). The clearance dialog should show the candidate's missing evidence fields before the reviewer clears it.
 - **Unrelated edits still succeed.** A `visuals-edit` on another scene succeeds while an evidence file differs from its recorded hash. The changed evidence is reported in the asset facts; it does not block that edit.
 - **Concurrency.** A `concurrency` refusal (exit 9) can come from an input or evidence file changing during the edit. Treat it as "reload and retry", like `revision_mismatch`.
+
+## Milestone 4: visuals V2b (engine D-124), verified at `26c608f` (2026-11-27)
+
+**Pinned engine:** `ENGINE_REF` is now `26c608f3347062faffb2ff1b015f0aa260758056`, the merge of `youtube-agent` PR #18 (D-124, owner decision 5, with one review-correction round). This is the minimum engine for M4 UI-B. Engine V1, V2a and V2b are all merged.
+
+**Required real-engine script.** `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` against a fresh clone at `26c608f`: integration 9 tests, 0 skipped, 0 failed; E2E as reported in the PR. The UI does not drive `visuals-edit` or apply yet, so this shows that M1–M3 and UI-A still work with the new G3.
+
+**Engine verification.** The full offline engine suite was 1624 passed, 14 deselected (the `ollama`, `local_tts` and `network` markers). That includes `tests/test_visuals_g3.py` with 21 tests. GitHub CI did not run on the engine PR because of the account billing block, so this rests on local runs.
+
+**What changed for the UI.** No command, JSON shape, exit code, file format or revision changed. G3 (`visuals-state` `gates.g3`, and `production-check`/`production-status`) now requires applied, intact, currently cleared images, and adds three finding uses:
+
+| Code | When | Detail (example) |
+|---|---|---|
+| `visuals_not_applied` | A scene has a selection whose `apply_state` is `selected_not_applied`, `changed_since_apply` or `draft_edited`. One finding names every such scene, and `artifact` is `storyboard.draft.json`. | "G3: 8 scene(s) do not show their selection in the draft: scene-001 (selected_not_applied), …". The next action is `ytagent visuals-apply` (with `--replace-shots` for hand-edited shots), then `draft-approve`. |
+| `applied_image_problem` | An image the draft shows, existing shots included, fails the release check (`asset_problem`), or its rights are no longer current for a reason other than revocation. | "img-… (scene-001): image bytes no longer match their content address" or "… its rights are not current (evidence_changed)" |
+| `image_rights_not_cleared` | Also used for an applied image whose clearance was revoked, even when no selection names it any more. | "img-… (scene-001): the rights clearance of the image it was applied from was revoked" |
+
+**Release.** `production-check --mode release` blocks an image whose rights are no longer current with `image_not_releasable` ("img-…: rights are not current (clearance_revoked)"). The release image check reads one consistent snapshot, with `storyboard.json` as one of its inputs. It is read again if anything changes, and raises `concurrency` (exit 9) if the project keeps changing.
+
+**Offline CLI probe** (fresh clone at `26c608f`; a fixture-drafted English project with 8 scenes, each given an imported image with complete licence metadata, cleared with `own_work` and selected in one `visuals-edit`; no network):
+
+| Step | G3 | Release image blockers |
+|---|---|---|
+| selected, not applied | `needs_review`: `visuals_not_applied` (8 scenes, `selected_not_applied`) | n/a |
+| `visuals-apply` | `ready`, no findings | n/a |
+| `draft-approve`, `draft-export` | `ready` | none |
+| `clearance.revoke` of one, still selected | `needs_review`: `image_rights_not_cleared` twice (the selected candidate and the applied asset) | n/a |
+| that scene's selection cleared (`shots.clear`) | `needs_review`: `image_rights_not_cleared` for the asset only | `image_not_releasable` "rights are not current (clearance_revoked)" |
+| a new `clearance.set`, no apply | `ready` | none |
+| an applied image's bytes changed | `needs_review`: `applied_image_problem` "image bytes no longer match their content address" | n/a |
+
+**Notes for UI-B:**
+- **Re-approve after every apply.** After apply → `draft-approve` → a selection change → a second apply, G3 reports `visuals_invalid` ("review.json was replaced since planning …") until the draft is approved again. This comes from the existing plan and approval binding, not from D-124, and also happens at `c089089`. The UI should send the reviewer to approve the draft again after each apply.
+- **G3 is the authority.** The gates panel shows the engine's G3 findings as reported. The UI-A note "G3 does not require the selection to be applied" is removed, because it no longer describes the pinned engine.
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
