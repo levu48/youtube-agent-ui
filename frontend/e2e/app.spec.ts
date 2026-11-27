@@ -778,8 +778,55 @@ test("visuals: plan, a search bound to the engine preview, the gallery, an impor
   await expect(imported.getByText("Needs a human rights review")).toBeVisible();
   await expect.poll(() => imported.getByRole("img").evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
 
+  // UI-B: clear the import's rights in a dialog bound to its bytes, with the exact statement.
+  await imported.getByRole("button", { name: /Clear rights…/ }).click();
+  const clr = page.getByRole("dialog", { name: "Record a rights clearance" });
+  await expect(clr.getByRole("img", { name: /the image being cleared/ })).toBeVisible();
+  await expect(clr.getByRole("checkbox", { name: /I make this statement/ })).not.toBeChecked();
+  await clr.getByLabel(/^Reviewer/).fill("Nguyễn Văn A");
+  await clr.getByLabel(/^Basis/).selectOption("own_work");
+  await clr.getByLabel(/^Justification/).fill("Tôi tự chụp ảnh này năm 2024 cho chính dự án này.");
+  await clr.getByLabel(/^Evidence/).fill("https://project.example/ben-cang");
+  await clr.getByRole("checkbox", { name: /I make this statement/ }).check();
+  await settled(clr);
+  await axe(page);
+  await clr.getByRole("button", { name: /Record clearance/ }).click();
+  await expect(clr).toBeHidden({ timeout: 30_000 });
+  await expect(imported.getByText(/Set by Nguyễn Văn A/)).toBeVisible();
+
+  // Select it for scene-001 and save the shot list.
+  const card1 = page.locator("#scene-scene-001");
+  await imported.getByRole("button", { name: /Use as a shot/ }).click();
+  await expect(imported.getByRole("button", { name: /Shot 1 \(remove\)/ })).toHaveAttribute("aria-pressed", "true");
+  await axe(page);
+  await card1.getByRole("button", { name: /Save selection/ }).click();
+  await expect(card1.getByText("Selected, not applied")).toBeVisible({ timeout: 30_000 });
+
+  // Validate, then apply the validated revision; G1 goes out of date.
+  await page.getByRole("tab", { name: "Validate and apply" }).click();
+  await page.getByRole("button", { name: /Validate visuals/ }).click();
+  const applyBtn = page.getByRole("button", { name: /Apply selection…/ });
+  await expect(applyBtn).toBeEnabled({ timeout: 30_000 });
+  await axe(page);
+  await applyBtn.click();
+  const ap = page.getByRole("dialog", { name: "Apply the selection to the draft" });
+  await expect(ap.getByText(/editorial approval \(G1\) goes out of date/)).toBeVisible();
+  await ap.getByLabel(/^Reviewer/).fill("Nguyễn Văn A");
+  await settled(ap);
+  await axe(page);
+  await ap.getByRole("button", { name: /^Apply selection$/ }).click();
+  await expect(ap).toBeHidden({ timeout: 60_000 });
+  await expect(page.getByText(/Apply: Published/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Re-approve the draft (G1)" }).first()).toHaveAttribute("href", `${p}/draft`);
+  await expect(page.getByText("G1 out of date after apply: approve the draft again")).toBeVisible();
+  await axe(page);
+  await page.getByRole("tab", { name: "Scenes and candidates" }).click();
+  await expect(card1.getByText("Applied and current")).toBeVisible();
+
   await page.getByRole("tab", { name: "Applied images" }).click();
-  await expect(page.getByText("The draft shows no applied images yet.")).toBeVisible();
+  const appliedImg = page.locator("img[src*='/visuals/assets/']").first();
+  await expect(appliedImg).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => appliedImg.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)).toBe(true);
   await axe(page);
   await page.getByRole("tab", { name: "Engine report" }).click();
   await expect(page.getByText(/every fact on this page comes from this one engine read/)).toBeVisible();
