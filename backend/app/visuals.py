@@ -93,9 +93,13 @@ def _hash_fd(fd: int, limit: int) -> str:
     return h.hexdigest()
 
 
+MAX_STAT_ENTRIES = 4096  # small JSON records (inputs and evidence) across every project
+
+
 @dataclass
 class _StatCache:
-    """SHA-256 per file, keyed by its stat identity, so an unchanged file is not re-read."""
+    """SHA-256 per file, keyed by its stat identity, so an unchanged file is not re-read.
+    Bounded: past ``MAX_STAT_ENTRIES`` the oldest entries are dropped (a miss only re-hashes)."""
 
     entries: dict[tuple[str, str], tuple[tuple, str]] = field(default_factory=dict)
 
@@ -121,7 +125,10 @@ class _StatCache:
             return _UNREADABLE
         finally:
             os.close(fd)
+        self.entries.pop((str(root), rel), None)
         self.entries[(str(root), rel)] = (key, digest)
+        while len(self.entries) > MAX_STAT_ENTRIES:
+            self.entries.pop(next(iter(self.entries)))
         return digest
 
 

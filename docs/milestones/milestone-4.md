@@ -4,7 +4,7 @@
 - **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
 - **UI-A is merged** (UI PR #16): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
 - **UI-B is merged** (UI PR #19, `71e7565`, after one review-correction round), against `26c608f`: selection, bound clearances with history and revocation, plan narrowing, validation and apply, and the real-engine G3 success test with public-domain images. The manual live Wikimedia smoke test is still to be recorded in [m4-verification.md](../m4-verification.md).
-- **Definition of done:** 12 of 15 items met (checked 2026-11-27, below). Open: the live smoke test (network item), a manual accessibility acceptance pass, and independent review records for UI PRs #16–#18 (review item).
+- **Definition of done:** 13 of 15 items met (checked 2026-11-27, below). Open: the live smoke test (network item) and a manual accessibility acceptance pass.
 - **V2 is split in two engine PRs.**
   - **V2a is merged:** engine PR #17 (D-123), merge commit `c089089`. It covers `visuals-edit`, the clearance history, and the decision that changed evidence invalidates a clearance.
   - **V2b is merged:** engine PR #18 (D-124), merge commit `26c608f`, now the pinned `ENGINE_REF`. It is the decision-5 G3 and release change.
@@ -298,10 +298,11 @@ Every write holds the project (`409 job_conflict` / `project_busy`) and carries 
   - `scene_id`, `kind`, `provenance`;
   - optional `source_url` (https), `creator`, `license_name`, `license_url` (https) and `attribution`.
 - **Order:**
-  1. CSRF, origin and the project hold.
-  2. The text fields are validated before the file part is read, and `expected_revision` is compared with the backend's current snapshot. A mismatch gives `409 revision_conflict` before any upload bytes are read.
-  3. The file is read in memory with the size cap enforced while streaming, and its magic bytes are checked.
-  4. The bytes go to `visuals-import --stdin --expect-revision=R`, which checks the revision again under the lock before publishing (V1). The engine's check is the authoritative one.
+  1. CSRF and origin.
+  2. The text fields are validated when the file part starts, and `expected_revision` is compared with the backend's current snapshot. A mismatch gives `409 revision_conflict`. File bytes that arrived in the same network chunk are held, not accepted, until this check passes, and no further chunk is read before it.
+  3. The file is read in memory with the size cap enforced while streaming (held bytes included), and its magic bytes are checked. The project is not held while the upload is received (maintenance review 16-03).
+  4. The project is held (`409 job_conflict` / `project_busy`), and recovery and the revision are checked again.
+  5. The bytes go to `visuals-import --stdin --expect-revision=R`, which checks the revision again under the lock before publishing (V1). The engine's check is the authoritative one.
 - Bytes the engine cannot decode are refused by it with the generic code `error` (exit 3, "unrecognised image data"), not `invalid_input`. The backend's magic-byte check in step 3 therefore answers `422 invalid_input` itself before the engine runs, and an engine `error` from import is shown as a failed import with the engine's message.
 - The UI never stores the bytes on disk.
 
@@ -556,10 +557,29 @@ Checked on 2026-11-27 against UI `main` @ `71e7565` and engine `26c608f`. Eviden
   - The 375 px scan found one issue, which is fixed: the per-scene readiness table scrolled sideways without keyboard access (axe `scrollable-region-focusable`). It is now a labelled, focusable region.
   - The scans run on their own project (`visualsA11yProject`), set up through the API, so they do not depend on any other test.
 - [ ] Manual accessibility acceptance: keyboard-only use of the visuals journey (selection, the clearance and apply dialogs, focus order and focus return), screen-reader announcements (VoiceOver), and reflow at 200% and 400% zoom, recorded in [m4-verification.md](../m4-verification.md). **Open:** not done yet.
-- [ ] Each PR is reviewed, with no automatic merge.
-  - Met: nothing was merged automatically; every merge followed the owner's explicit request.
-  - Independent reviews: engine PRs #16 (three rounds), #17 and #18, and UI PR #19 (one correction round each for #17–#19).
-  - **Open:** UI PR #16 (UI-A) and the `ENGINE_REF` pin PRs #17 and #18 had CI but no recorded independent review. None of the reviews are recorded on GitHub (they were exchanged outside it).
+- [x] Each PR is reviewed, with no automatic merge.
+  - Nothing was merged automatically; every merge followed the owner's explicit request.
+  - Independent reviews, all exchanged outside GitHub, so there are no GitHub review records:
+
+    | PR | Head reviewed | Outcome |
+    |---|---|---|
+    | engine #16 (V1, D-122) | — | three rounds, merged after corrections |
+    | engine #17 (V2a, D-123) | — | one correction round, then approved |
+    | engine #18 (V2b, D-124) | — | one correction round, then approved |
+    | UI #16 (UI-A) | `117c9ae` | reviewed retrospectively (2026-11-27): no P0 or P1. Maintenance findings 16-01 to 16-05 are listed below |
+    | UI #17 (pin `c089089`) | `140564d` | approved retrospectively. 17-01 (evidence-lifecycle coverage) is listed below |
+    | UI #18 (pin `26c608f`) | `851d834` | approved retrospectively. 18-01 was resolved by UI #19 |
+    | UI #19 (UI-B) | — | one correction round (seven fixes), then merged |
+    | UI #21 (accessibility scans) | — | approved with two recommendations, both addressed |
+
+    The reviewer confirmed that UI CI passed for the head commits of UI #16–#18.
+  - **Maintenance findings from the retrospective review** (fixed in the M4 maintenance PR):
+    - **16-01:** an empty engine error message no longer crashes the error mapping.
+    - **16-02:** no file byte is accepted before the import's fields and revision are checked.
+    - **16-03:** an upload is received without holding the project, which is then checked again.
+    - **16-04:** the stat cache is bounded.
+    - **16-05:** the narration read runs off the event loop.
+    - **17-01:** a real-engine test covers the evidence lifecycle: changed, removed, restored.
 
 ## Claude Code handoff
 - **Read first:** `CLAUDE.md`, `docs/architecture.md`, `docs/engine-compatibility.md`, `docs/api-contract.md`, `docs/ui-design.md`, this file, and the engine's `docs/milestone-4-visuals.md` and decisions D-58…D-75.
