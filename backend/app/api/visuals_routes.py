@@ -1,5 +1,6 @@
-"""Visuals API (M4 UI-A): the engine's visuals snapshot, hash-addressed images, the plan job,
-the preview-bound image search and the image import.
+"""Visuals API (M4 UI-A and UI-B): the engine's visuals snapshot, hash-addressed images, the
+plan job, the preview-bound image search, the image import, and (UI-B) the visuals edits -
+shots, rights clearances and revocations, plan narrowing - and apply.
 
 Every mutation is one allowlisted engine command under the visuals revision the page loaded
 (``--expect-revision``), refused first by the backend when the current snapshot reports a
@@ -35,6 +36,15 @@ from app.schemas import (
     VisualsPlanRequest,
 )
 from app.state import AppState, get_state
+from app.visuals_schemas import (
+    CLEARANCE_ACKNOWLEDGEMENT,
+    CLEARANCE_BASES,
+    FITS,
+    MAX_SHOTS,
+    MOTIONS,
+    VisualsApplyRequest,
+    VisualsEditRequest,
+)
 
 router = APIRouter(prefix="/api/v1")
 State = Annotated[AppState, Depends(get_state)]
@@ -47,9 +57,15 @@ _IMAGE_HEADERS = {
     "Cache-Control": "private, max-age=31536000, immutable",
 }
 EDITING = {
-    "supported": False,
-    "reason": "Choosing images and recording rights clearances need the engine's "
-    "visuals-edit command (M4 V2), which this engine does not have yet.",
+    "supported": True,
+    "reason": None,
+    # The engine's exact clearance acknowledgement and its bases (visuals/models.py), shown
+    # verbatim; the engine refuses any other text.
+    "acknowledgement": CLEARANCE_ACKNOWLEDGEMENT,
+    "bases": list(CLEARANCE_BASES),
+    "motions": list(MOTIONS),
+    "fits": list(FITS),
+    "max_shots": MAX_SHOTS,
 }
 
 
@@ -211,8 +227,33 @@ def _visuals_failure(res, what: str) -> ApiError:
                 "paths": _ids(details.get("paths"), _PATH_SAFE),
             },
         )
-    if code in ("g1_not_current", "not_ready", "human_edit_conflict"):
+    if code == "invalid_patch":
+        return _patch_failure(jerr, first, what)
+    if code == "not_ready":
+        errors = details.get("errors") if isinstance(details.get("errors"), list) else []
+        return ApiError(
+            409,
+            "not_ready",
+            first or f"The engine refused to {what}.",
+            {"errors": [redact(str(e))[:500] for e in errors][:25]},
+        )
+    if code == "human_edit_conflict":
+        return ApiError(
+            409,
+            "human_edit_conflict",
+            "The draft has shots that visuals-apply did not write (edited by hand). The UI "
+            "never replaces them: keep them, or resolve them in the CLI.",
+            {"conflicts": _lines(jerr.get("message"))},
+        )
+    if code == "g1_not_current":
         return ApiError(409, code, first or f"The engine refused to {what}.")
+    if code == "concurrency":
+        return ApiError(
+            409,
+            "engine_conflict",
+            "The project changed while the engine was working (another command, a job or the "
+            "CLI). Nothing was written. Reload, then try again.",
+        )
     if code == "invalid_input":
         return ApiError(422, "visuals_refused", f"The engine refused to {what}: {first}")
     if code == "error" and res.exit_code == 3:  # e.g. undecodable import bytes
@@ -220,6 +261,42 @@ def _visuals_failure(res, what: str) -> ApiError:
     if res.exit_code == 9:
         return ApiError(409, "engine_conflict", "Another engine run is using this project.")
     return ApiError(502, res.classification.code, first or res.classification.summary)
+
+
+def _lines(message: object) -> list[str]:
+    """The ``  - item`` lines of an engine message (its listed problems)."""
+    out = []
+    for line in redact(str(message or "")).splitlines():
+        line = line.strip()
+        if line.startswith("- "):
+            out.append(line[2:][:500])
+    return out[:25]
+
+
+def _patch_failure(jerr: dict, first: str, what: str) -> ApiError:
+    """``invalid_patch`` (engine D-123): ``details`` is a list of ``{loc, msg, code}``. A broken
+    clearance history refuses every edit and has its own status, as in M3."""
+    raw = jerr.get("details")
+    errors = [
+        {
+            "loc": str(d.get("loc", ""))[:200],
+            "msg": redact(str(d.get("msg", "")))[:500],
+            "code": str(d.get("code", ""))[:60] or None,
+        }
+        for d in (raw if isinstance(raw, list) else [])
+        if isinstance(d, dict)
+    ][:50]
+    if any(e["code"] == "history_tampered" for e in errors):
+        return ApiError(
+            409,
+            "history_tampered",
+            "The clearance history is not intact, so the engine refuses every visuals edit. "
+            "Restore it or resolve it in the CLI.",
+            {"errors": errors},
+        )
+    return ApiError(
+        422, "invalid_edit", first or f"The engine refused to {what}.", {"errors": errors}
+    )
 
 
 def _ok_json(res) -> dict:
@@ -631,6 +708,111 @@ async def visuals_import(project_id: str, request: Request, s: State) -> dict:
         "rights_status": out.get("rights_status"),
         "warnings": [redact(str(w))[:500] for w in out.get("warnings") or []][:20],
         "revision": out.get("revision") if engine_revision(out) else None,
+    }
+    snap = await _snapshot(s, row, root, fresh=True)
+    return {"result": result, "visuals": _view(s, row, root, snap)}
+
+
+# ---------------------------------------------------------------------- edit and apply (UI-B)
+
+
+async def _write(s: AppState, row: ProjectRow, root, expected: str, what: str, call) -> dict:
+    """One short engine write while holding the project: the backend's recovery and revision
+    pre-checks first, then the engine (which checks both again under its lock)."""
+    with s.jobs.exclusive(row.id):
+        await _precheck(s, row, root, expected)
+        try:
+            res = await call()
+        except commands.ArgumentError as exc:
+            raise ApiError(422, "validation_error", str(exc)) from None
+        except Exception as exc:
+            pe = to_public(exc, operation=what)
+            raise ApiError(pe.status, pe.code, pe.message) from None
+        finally:
+            s.visuals.invalidate(row.id)
+            s.engine.invalidate(row.id)
+            s.projects.touch(row.id)
+        if res.exit_code != 0 and not res.timed_out:
+            raise _visuals_failure(res, what)
+        return _ok_json(res)
+
+
+def _rev(value: object) -> str | None:
+    return value if engine_revision({"revision": value}) else None
+
+
+def _strs(value: object, limit: int = 500) -> list[str]:
+    return [redact(str(v))[:200] for v in value][:limit] if isinstance(value, list) else []
+
+
+@router.post("/projects/{project_id}/visuals/edit")
+async def visuals_edit(project_id: str, body: VisualsEditRequest, s: State) -> dict:
+    """Shots, rights clearances, revocations and plan narrowing through ``ytagent
+    visuals-edit``, under the loaded revision. All operations publish together or not at all;
+    a dry run writes nothing. A clearance is bound by the engine to the image bytes and rights
+    evidence the reviewer saw (``expected_candidate_sha256``, ``expected_rights_fingerprint``)."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    data = await _write(
+        s,
+        row,
+        root,
+        body.expected_revision,
+        "edit the visuals",
+        lambda: s.engine.visuals_edit(
+            root, body.patch(), expect_revision=body.expected_revision, dry_run=body.dry_run
+        ),
+    )
+    history = [
+        {
+            "op_index": h.get("op_index"),
+            "id": str(h.get("id", ""))[:40],
+            "action": str(h.get("action", ""))[:20],
+            "candidate_id": str(h.get("candidate_id", ""))[:120],
+        }
+        for h in data.get("history") or []
+        if isinstance(h, dict)
+    ][: MAX_SHOTS * 10]
+    result = {
+        "status": data.get("status"),
+        "dry_run": bool(data.get("dry_run")),
+        "previous_revision": _rev(data.get("previous_revision")),
+        "revision": _rev(data.get("revision")),
+        "changed_files": _strs(data.get("changed_files"), 20),
+        "history": history,
+        "check": data.get("check") if isinstance(data.get("check"), dict) else None,
+    }
+    out: dict[str, Any] = {"result": result}
+    if not body.dry_run:
+        out["visuals"] = _view(s, row, root, await _snapshot(s, row, root, fresh=True))
+    return out
+
+
+@router.post("/projects/{project_id}/visuals/apply")
+async def visuals_apply(project_id: str, body: VisualsApplyRequest, s: State) -> dict:
+    """Apply the selection to the draft (``visuals-apply --reviewer``), bound to the revision
+    the reviewer validated. Never ``--replace-shots`` or ``--replace-assets``. Apply changes the
+    draft, so G1 goes out of date until ``draft-approve`` runs again."""
+    row = s.projects.require(project_id)
+    root = s.projects.confined_root(row)
+    data = await _write(
+        s,
+        row,
+        root,
+        body.expected_revision,
+        "apply the visuals",
+        lambda: s.engine.visuals_apply(
+            root, expect_revision=body.expected_revision, reviewer=body.reviewer
+        ),
+    )
+    result = {
+        "status": data.get("status"),
+        "scenes_changed": _strs(data.get("scenes_changed")),
+        "assets_added": _strs(data.get("assets_added")),
+        "assets_unchanged": _strs(data.get("assets_unchanged")),
+        "rights_unverified": _strs(data.get("rights_unverified")),
+        "images_restored": _strs(data.get("images_restored")),
+        "revision": _rev(data.get("revision")),
     }
     snap = await _snapshot(s, row, root, fresh=True)
     return {"result": result, "visuals": _view(s, row, root, snap)}

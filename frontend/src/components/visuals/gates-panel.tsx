@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { StatusBadge } from "@/components/status-badge";
 import type { VisualsView } from "@/lib/api";
 import { g3Presentation, gatePresentation } from "@/lib/status";
@@ -8,7 +10,7 @@ const NOT_CERTIFIED = "not certified: recovery pending";
  * none. Since engine D-124 (owner decision 5), G3 itself requires every selection to be
  * applied and every image the draft shows to be intact and currently cleared, so its
  * findings (`visuals_not_applied`, `applied_image_problem`, ...) are shown as reported. */
-export function GatesPanel({ view }: { view: VisualsView }) {
+export function GatesPanel({ view, projectHref }: { view: VisualsView; projectHref?: string }) {
   const g1 = view.gates.g1;
   const g3 = view.gates.g3;
   const g1p = gatePresentation(g1.status);
@@ -31,6 +33,14 @@ export function GatesPanel({ view }: { view: VisualsView }) {
             </li>
           ))}
         </ul>
+      ) : null}
+      {g1.status === "stale_after_apply" && projectHref ? (
+        <p className="rounded border border-amber-200 bg-amber-50 p-2 text-sm text-warning">
+          Applying images changed the draft, so its editorial approval is out of date.{" "}
+          <Link href={`${projectHref}/draft`} className="font-medium underline">
+            Re-approve the draft (G1)
+          </Link>
+        </p>
       ) : null}
       <p className="text-xs text-muted-foreground">
         G3 has no approval step: it is computed by the engine from the plan, the selection and the images. Nothing here

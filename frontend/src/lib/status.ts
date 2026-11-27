@@ -321,6 +321,16 @@ export const RIGHTS_REASON: Record<string, string> = {
   rights_changed: "The candidate's rights evidence changed after apply",
   candidate_missing: "No catalogue candidate has this image any more",
   candidate_ambiguous: "Applied before candidate tracking; several candidates have these bytes",
+  evidence_changed: "The evidence document of its clearance changed after the clearance",
+};
+
+/** Clearance bases (engine CLEARANCE_BASES), in words. */
+export const CLEARANCE_BASIS: Record<string, string> = {
+  license_confirmed_at_source: "Licence confirmed at the source",
+  public_domain_confirmed: "Public domain confirmed",
+  permission_obtained: "Permission obtained from the rights holder",
+  own_work: "Our own work",
+  provider_terms_reviewed: "Generator terms reviewed (generated images only)",
 };
 
 export const BINDING_LABEL: Record<string, string> = {

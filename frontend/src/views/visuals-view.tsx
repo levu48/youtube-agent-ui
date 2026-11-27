@@ -13,18 +13,23 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/states";
 import { Button } from "@/components/ui/button";
 import { AcquireDialog } from "@/components/visuals/acquire-dialog";
+import { ApplyPanel } from "@/components/visuals/apply-panel";
 import { AssetFacts } from "@/components/visuals/asset-facts";
 import { CandidateGallery } from "@/components/visuals/candidate-gallery";
+import { ClearanceDialog, RevokeDialog, clearanceTarget, type ClearanceTarget } from "@/components/visuals/clearance-dialog";
 import { GatesPanel, NOT_CERTIFIED } from "@/components/visuals/gates-panel";
 import { ImportDialog } from "@/components/visuals/import-dialog";
 import { RecoveryBanner, blockReason } from "@/components/visuals/recovery-banner";
-import { ApiError, api, type VisualsView as View } from "@/lib/api";
+import { PlanEditor, ShotEditor } from "@/components/visuals/scene-editor";
+import { useSceneDrafts, type SceneDrafts } from "@/hooks/use-scene-drafts";
+import { ApiError, api, type VisualCandidate, type VisualsView as View } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { applyStatePresentation, g3Presentation, humanize } from "@/lib/status";
 
-type Tab = "scenes" | "applied" | "report";
+type Tab = "scenes" | "validate" | "applied" | "report";
 const TABS: { id: Tab; label: string }[] = [
   { id: "scenes", label: "Scenes and candidates" },
+  { id: "validate", label: "Validate and apply" },
   { id: "applied", label: "Applied images" },
   { id: "report", label: "Engine report" },
 ];
@@ -43,6 +48,10 @@ export function VisualsView() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [acquireOpen, setAcquireOpen] = useState(false);
   const [importScene, setImportScene] = useState<string | null | false>(false);
+  const [clearing, setClearing] = useState<ClearanceTarget | null>(null);
+  const [revoking, setRevoking] = useState<VisualCandidate | null>(null);
+  const [validated, setValidated] = useState<string | null>(null);
+  const drafts = useSceneDrafts(view.data);
   const failed = useRef(new Set<string>());
   const v = view.data;
   const activeJob = jobId ?? v?.active_job_id ?? null;
@@ -76,6 +85,20 @@ export function VisualsView() {
   const title = project.data?.display_name ?? projectId;
   const projectHref = `/projects/${encodeURIComponent(projectId)}`;
   const block = v ? blockReason(v) : null;
+  const editBlock = block ?? (v && !v.editing.supported ? v.editing.reason : null);
+  // "Validate visuals": the engine's evaluation, read again; apply is bound to its revision.
+  // Only a successful, fresh read validates: a failed refetch keeps the old data in the cache,
+  // and that old snapshot never authorises apply.
+  const validate = async (): Promise<{ revision: string | null; error: string | null }> => {
+    setValidated(null);
+    const r = await view.refetch();
+    if (!r.isSuccess || !r.data) {
+      return { revision: null, error: r.error instanceof Error ? r.error.message : "The engine's visuals state could not be read." };
+    }
+    if (r.data.recovery_required) return { revision: null, error: "An interrupted publication must be recovered first." };
+    setValidated(r.data.revision);
+    return { revision: r.data.revision, error: null };
+  };
   const busy = Boolean(block) || plan.isPending;
 
   return (
@@ -115,7 +138,7 @@ export function VisualsView() {
         <div className="space-y-5">
           <RecoveryBanner view={v} />
           {activeJob ? <JobCard jobId={activeJob} title="Visuals job" /> : null}
-          <GatesPanel view={v} />
+          <GatesPanel view={v} projectHref={projectHref} />
           {!v.plan ? (
             <EmptyState
               icon={ImageIcon}
@@ -143,7 +166,21 @@ export function VisualsView() {
               <Tabs tab={tab} setTab={setTab} />
               <div role="tabpanel" id={`vpanel-${tab}`} aria-labelledby={`vtab-${tab}`} tabIndex={-1} className="focus-visible:outline-none">
                 {tab === "scenes" ? (
-                  <ScenesTab view={v} projectId={projectId} lang={lang} block={block} onImport={(s) => setImportScene(s)} onImageError={onImageError} />
+                  <ScenesTab
+                    view={v}
+                    projectId={projectId}
+                    lang={lang}
+                    block={block}
+                    editBlock={editBlock}
+                    onImport={(s) => setImportScene(s)}
+                    onImageError={onImageError}
+                    onClear={(c) => setClearing(clearanceTarget(c, v))}
+                    onRevoke={(c) => setRevoking(c)}
+                    drafts={drafts}
+                  />
+                ) : null}
+                {tab === "validate" ? (
+                  <ApplyPanel view={v} projectId={projectId} block={editBlock} onValidate={validate} validated={validated} unsaved={drafts.unsaved} />
                 ) : null}
                 {tab === "applied" ? <AssetFacts view={v} projectId={projectId} onImageError={onImageError} /> : null}
                 {tab === "report" ? <ReportTab view={v} /> : null}
@@ -163,6 +200,12 @@ export function VisualsView() {
             provider={v.network.search_provider}
             onStarted={started}
           />
+          {clearing ? (
+            <ClearanceDialog target={clearing} view={v} projectId={projectId} block={editBlock} onClose={() => setClearing(null)} />
+          ) : null}
+          {revoking ? (
+            <RevokeDialog candidate={revoking} view={v} projectId={projectId} block={editBlock} onClose={() => setRevoking(null)} />
+          ) : null}
           {importScene !== false && !block ? (
             <ImportDialog
               key={importScene ?? "any"}
@@ -206,6 +249,12 @@ function Toolbar({ view, block, onSearch, onImport }: { view: View; block: strin
         </p>
       ) : null}
       {!view.editing.supported ? <p className="text-xs text-muted-foreground">{view.editing.reason}</p> : null}
+      {view.clearance_history_problems?.length ? (
+        <p role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-sm text-danger">
+          The clearance history is not intact ({view.clearance_history_problems.join("; ")}), so the engine refuses every visuals
+          edit until it is restored in the CLI.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -250,70 +299,142 @@ function ScenesTab({
   projectId,
   lang,
   block,
+  editBlock,
   onImport,
   onImageError,
+  onClear,
+  onRevoke,
+  drafts,
 }: {
   view: View;
   projectId: string;
   lang?: string;
   block: string | null;
+  editBlock: string | null;
   onImport: (sceneId: string) => void;
   onImageError: (url: string) => void;
+  onClear: (c: VisualCandidate) => void;
+  onRevoke: (c: VisualCandidate) => void;
+  drafts: SceneDrafts;
 }) {
-  const plan = new Map(view.plan!.scenes.map((s) => [s.scene_id, s]));
-  const report = new Map(view.report.scenes.map((s) => [s.scene_id, s]));
-  const selection = new Map((view.selection?.scenes ?? []).map((s) => [s.scene_id, s.shots ?? []]));
   return (
     <ul className="space-y-4">
-      {view.scenes.map((s) => {
-        const p = plan.get(s.scene_id);
-        const r = report.get(s.scene_id);
-        const shots = selection.get(s.scene_id) ?? [];
-        return (
-          <li key={s.scene_id} id={`scene-${s.scene_id}`} className="space-y-3 rounded-[var(--radius-card)] border bg-surface p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-semibold">{s.scene_id}</h3>
-              {p ? <span className="rounded border px-1.5 text-xs text-muted-foreground">{humanize(p.desired_kind)}</span> : null}
-              <StatusBadge presentation={applyStatePresentation(s.apply_state)} prefix="Apply state" />
-              {view.recovery_required ? <span className="text-xs text-danger">({NOT_CERTIFIED})</span> : null}
-              {p?.requires_manual_asset ? (
-                <span className="rounded border border-amber-300 bg-amber-50 px-1.5 text-xs text-warning">Needs an image you provide</span>
-              ) : null}
-            </div>
-            {view.narration[s.scene_id] ? (
-              <p lang={lang} className="text-sm leading-6">
-                {view.narration[s.scene_id]}
-              </p>
-            ) : null}
-            {p ? (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-                <dt className="text-muted-foreground">Brief</dt>
-                <dd lang={lang}>{text(p.brief) ?? "—"}</dd>
-                <dt className="text-muted-foreground">Search</dt>
-                <dd>{p.search_enabled ? (text(p.search_query) ?? "—") : "Off for this scene"}</dd>
-                {r ? (
-                  <>
-                    <dt className="text-muted-foreground">Engine</dt>
-                    <dd>
-                      {humanize(String(r.disposition))}
-                      {r.messages?.length ? ` · ${r.messages.map(String).join("; ")}` : ""}
-                    </dd>
-                  </>
-                ) : null}
-                <dt className="text-muted-foreground">Selected</dt>
-                <dd>{shots.length ? shots.map((x) => x.candidate_id).join(", ") : "Nothing selected"}</dd>
-                <dt className="text-muted-foreground">In the draft</dt>
-                <dd>{s.draft_shots.length ? `${s.draft_shots.length} shot(s)` : "No shots"}</dd>
-              </dl>
-            ) : null}
-            <CandidateGallery view={view} projectId={projectId} sceneId={s.scene_id} brief={text(p?.brief) ?? undefined} onImageError={onImageError} />
-            <Button size="sm" variant="outline" onClick={() => onImport(s.scene_id)} disabled={Boolean(block)}>
-              <FileUp aria-hidden /> Import an image for {s.scene_id}…
-            </Button>
-          </li>
-        );
-      })}
+      {view.scenes.map((s) => (
+        <SceneCard
+          key={s.scene_id}
+          view={view}
+          sceneId={s.scene_id}
+          projectId={projectId}
+          lang={lang}
+          block={block}
+          editBlock={editBlock}
+          onImport={onImport}
+          onImageError={onImageError}
+          onClear={onClear}
+          onRevoke={onRevoke}
+          drafts={drafts}
+        />
+      ))}
     </ul>
+  );
+}
+
+function SceneCard({
+  view,
+  sceneId,
+  projectId,
+  lang,
+  block,
+  editBlock,
+  onImport,
+  onImageError,
+  onClear,
+  onRevoke,
+  drafts,
+}: {
+  view: View;
+  sceneId: string;
+  projectId: string;
+  lang?: string;
+  block: string | null;
+  editBlock: string | null;
+  onImport: (sceneId: string) => void;
+  onImageError: (url: string) => void;
+  onClear: (c: VisualCandidate) => void;
+  onRevoke: (c: VisualCandidate) => void;
+  drafts: SceneDrafts;
+}) {
+  const s = view.scenes.find((x) => x.scene_id === sceneId)!;
+  const p = view.plan!.scenes.find((x) => x.scene_id === sceneId);
+  const r = view.report.scenes.find((x) => x.scene_id === sceneId);
+  // The unsaved shot list lives in the page's draft store, so it survives tab switches and
+  // refreshes, and a changed saved selection is reported as a conflict, never overwritten.
+  const d = drafts.get(sceneId);
+  const saved = d.saved;
+  const shots = d.shots;
+  const toggle = (c: VisualCandidate) =>
+    drafts.set(
+      sceneId,
+      shots.some((x) => x.candidate_id === c.id) ? shots.filter((x) => x.candidate_id !== c.id) : [...shots, { candidate_id: c.id }],
+    );
+  return (
+    <li id={`scene-${s.scene_id}`} className="space-y-3 rounded-[var(--radius-card)] border bg-surface p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-base font-semibold">{s.scene_id}</h3>
+        {p ? <span className="rounded border px-1.5 text-xs text-muted-foreground">{humanize(p.desired_kind)}</span> : null}
+        <StatusBadge presentation={applyStatePresentation(s.apply_state)} prefix="Apply state" />
+        {view.recovery_required ? <span className="text-xs text-danger">({NOT_CERTIFIED})</span> : null}
+        {p?.requires_manual_asset ? (
+          <span className="rounded border border-amber-300 bg-amber-50 px-1.5 text-xs text-warning">Needs an image you provide</span>
+        ) : null}
+      </div>
+      {view.narration[s.scene_id] ? (
+        <p lang={lang} className="text-sm leading-6">
+          {view.narration[s.scene_id]}
+        </p>
+      ) : null}
+      {p ? (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+          <dt className="text-muted-foreground">Brief</dt>
+          <dd lang={lang}>{text(p.brief) ?? "—"}</dd>
+          <dt className="text-muted-foreground">Search</dt>
+          <dd>{p.search_enabled ? (text(p.search_query) ?? "—") : "Off for this scene"}</dd>
+          {r ? (
+            <>
+              <dt className="text-muted-foreground">Engine</dt>
+              <dd>
+                {humanize(String(r.disposition))}
+                {r.messages?.length ? ` · ${r.messages.map(String).join("; ")}` : ""}
+              </dd>
+            </>
+          ) : null}
+          <dt className="text-muted-foreground">Selected (saved)</dt>
+          <dd>{saved.length ? saved.map((x) => x.candidate_id).join(", ") : "Nothing selected"}</dd>
+          <dt className="text-muted-foreground">In the draft</dt>
+          <dd>{s.draft_shots.length ? `${s.draft_shots.length} shot(s)` : "No shots"}</dd>
+        </dl>
+      ) : null}
+      {p ? <PlanEditor key={JSON.stringify(p)} view={view} projectId={projectId} scene={p} block={editBlock} /> : null}
+      <ShotEditor view={view} projectId={projectId} sceneId={s.scene_id} drafts={drafts} block={editBlock} />
+      <CandidateGallery
+        view={view}
+        projectId={projectId}
+        sceneId={s.scene_id}
+        brief={text(p?.brief) ?? undefined}
+        onImageError={onImageError}
+        editing={{
+          chosen: shots.map((x) => x.candidate_id),
+          onToggle: toggle,
+          onClear,
+          onRevoke,
+          block: editBlock,
+          selectBlock: d.saving ? `Saving the selection for ${sceneId}…` : null,
+        }}
+      />
+      <Button size="sm" variant="outline" onClick={() => onImport(s.scene_id)} disabled={Boolean(block)}>
+        <FileUp aria-hidden /> Import an image for {s.scene_id}…
+      </Button>
+    </li>
   );
 }
 

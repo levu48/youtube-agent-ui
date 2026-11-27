@@ -375,6 +375,15 @@ A narrowing `plan.update` (search off) is `published` with `changed_files: ["vis
 - **Re-approve after every apply.** After apply → `draft-approve` → a selection change → a second apply, G3 reports `visuals_invalid` ("review.json was replaced since planning …") until the draft is approved again. This comes from the existing plan and approval binding, not from D-124, and also happens at `c089089`. The UI should send the reviewer to approve the draft again after each apply.
 - **G3 is the authority.** The gates panel shows the engine's G3 findings as reported. The UI-A note "G3 does not require the selection to be applied" is removed, because it no longer describes the pinned engine.
 
+### Verified at `26c608f` (UI-B, 2026-11-27)
+
+Checked by the real-engine integration test `test_g3_success_with_genuinely_licensed_images` (offline, fixture draft) and the real-engine E2E journey:
+- **Acknowledgement.** The backend's copy of the clearance acknowledgement (`app/visuals_schemas.py`) is accepted by the engine verbatim; the test asserts the view carries it and every clearance succeeds with it.
+- **Full G3 path.** Three public-domain Commons images (`backend/tests/fixtures/visuals/SOURCE.md`) are imported per scene by kind (`archival`, `document`, `chart`), with source URL, creator, licence name and URL, and attribution. One `visuals-edit` with a `clearance.set` (`public_domain_confirmed`, evidence the Commons page URL) and a `shots.set` per scene publishes them; `history` has one `set` per clearance. The evaluation is then `render_ready` with no unpublishable images. `visuals-apply` at that revision publishes with `rights_unverified: []`; every scene is `applied_current` and G1 `stale_after_apply`. After `draft-approve`, G3 is `{status: ready, findings: []}`, and `production-status` reports `G3 visuals: ready` and `G1 editorial: approved`.
+- **Release.** After `draft-export`, `production-check --mode release --json` lists no `visuals`-stage, `image_not_releasable`, `fixture_image` or `credit_incomplete` blockers.
+- **Refusals.** A second apply at the spent revision is `revision_mismatch` (`409 revision_conflict`). Other bytes under a cleared candidate's file are reported as `integrity: mismatch`, G3 is no longer ready, and a new clearance is refused with `image_integrity`.
+- **Browser.** In the E2E journey on the real engine, an import is cleared in the bound dialog, selected, saved, validated and applied; the applied image is served from the asset endpoint at its hash.
+
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
 **Pinned engine:** `ENGINE_REF` is now `573ebddd8513f63c5afc5e73a0200b84cccdd9de`, the merge of `youtube-agent` PR #11 (decision D-117 plus the review fix `d3e2e5f`). This is the **minimum engine for editing and engine-checked approval**. Older engines still work for everything else, with editing off and the UI-token approval fallback described further down.

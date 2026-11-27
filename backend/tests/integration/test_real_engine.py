@@ -923,3 +923,170 @@ def test_visuals_workspace_with_real_engine(settings):
         r = c.post(f"{api}/visuals/acquire/preview", json={"expected_revision": view["revision"]})
         assert r.status_code == 409 and r.json()["error"]["code"] == "recovery_required"
         assert r.json()["error"]["details"]["checked_by"] == "backend"
+
+
+# --------------------------------------------------------------------------- M4 UI-B: G3
+
+VISUALS = Path(__file__).resolve().parent.parent / "fixtures" / "visuals"
+PD = "https://creativecommons.org/publicdomain/mark/1.0/"
+IMAGES = {  # by the kind each scene needs (the destination policy)
+    "archival": ("earth-apollo17.jpg", "NASA / Apollo 17 crew",
+                 "https://commons.wikimedia.org/wiki/File:The_Earth_seen_from_Apollo_17.jpg"),
+    "document": ("us-constitution-page1.jpg", "Constitutional Convention",
+                 "https://commons.wikimedia.org/wiki/File:Constitution_of_the_United_States_-_DPLA_-_"
+                 "9ca804144bd5965e992ae3528bc3c6a3_(page_1).jpg"),
+    "chart": ("global-temperature-anomaly.png", "NASA Goddard Institute for Space Studies",
+              "https://commons.wikimedia.org/wiki/File:Global_Temperature_Anomaly.svg"),
+}  # fmt: skip
+
+
+def test_g3_success_with_genuinely_licensed_images(settings):
+    """M4 UI-B on the real engine, offline: public-domain Commons images imported through
+    stdin with full provenance, cleared with ``visuals-edit`` (bound to their bytes, in the
+    clearance history), selected, validated and applied at the validated revision, then G1
+    again. The CLI reports G3 ready, and release lists no visuals or image blockers."""
+    from app.visuals_schemas import CLEARANCE_ACKNOWLEDGEMENT
+
+    settings.visuals_search_provider = "fixture"
+    api = "/api/v1/projects/hcm-demo"
+    root = settings.projects_root_real / "hcm-demo"
+    with Client(create_app(settings)) as c:
+        assert c.post("/api/v1/projects", json=PROJECT).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+
+        def approve() -> None:
+            draft = c.get(f"{api}/draft").json()
+            r = c.post(
+                f"{api}/draft/approve",
+                json={"reviewer": "Nguyễn Văn A", "confirm": True,
+                      "review_token": draft["review_token"]},
+            )  # fmt: skip
+            assert r.status_code == 200, r.text
+
+        def view() -> dict:
+            r = c.get(f"{api}/visuals")
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        def edit(*ops: dict) -> dict:
+            body = {"expected_revision": view()["revision"], "operations": list(ops)}
+            r = c.post(f"{api}/visuals/edit", json=body)
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        approve()
+        jid = c.post(f"{api}/visuals/plan", json={"expected_revision": view()["revision"]})
+        jid = jid.json()["job_id"]
+        wait_for(lambda: c.get(f"/api/v1/jobs/{jid}").json()["status"] == "succeeded", timeout=120)
+        v = view()
+        assert v["editing"]["supported"] is True
+        assert v["editing"]["acknowledgement"] == CLEARANCE_ACKNOWLEDGEMENT
+        kinds = {s["scene_id"]: s["desired_kind"] for s in v["plan"]["scenes"]}
+
+        # 1. Import a genuinely public-domain image for every scene, with full provenance.
+        picks: dict[str, dict] = {}
+        for sid, want in kinds.items():
+            kind = want if want in ("document", "chart") else "archival"
+            name, creator, page = IMAGES[kind]
+            r = c.post(
+                f"{api}/visuals/import",
+                data={"expected_revision": view()["revision"], "scene_id": sid, "kind": kind,
+                      "provenance": f"Public-domain file from Wikimedia Commons: {page}",
+                      "title": name, "source_url": page, "creator": creator,
+                      "license_name": "Public domain", "license_url": PD,
+                      "attribution": f"{creator}, public domain, via Wikimedia Commons"},
+                files={"file": (name, (VISUALS / name).read_bytes(), "application/octet-stream")},
+            )  # fmt: skip
+            assert r.status_code == 200, r.text
+            cid = r.json()["result"]["candidate_id"]
+            picks[sid] = next(x for x in r.json()["visuals"]["candidates"][sid] if x["id"] == cid)
+            assert picks[sid]["rights"]["status"] == "manual_review"
+
+        # 2. Clear each import's rights, bound to the bytes and evidence seen; 3. select it.
+        ops = [
+            {"op": "clearance.set", "candidate_id": x["id"],
+             "expected_candidate_sha256": x["sha256"],
+             "expected_rights_fingerprint": x["rights_fingerprint"],
+             "reviewer": "Nguyễn Văn A", "basis": "public_domain_confirmed",
+             "justification": "The Commons file page and its source both mark this exact image "
+             "as a public-domain work.",
+             "evidence": x["source_page_url"], "acknowledgement": CLEARANCE_ACKNOWLEDGEMENT}
+            for x in picks.values()
+        ]  # fmt: skip
+        ops += [{"op": "shots.set", "scene_id": sid, "shots": [{"candidate_id": x["id"]}]}
+                for sid, x in picks.items()]  # fmt: skip
+        out = edit(*ops)
+        assert out["result"]["status"] == "published"
+        assert [h["action"] for h in out["result"]["history"]] == ["set"] * len(picks)
+        v = out["visuals"]
+        assert len(v["clearance_history"]["entries"]) == len(picks)
+        assert {s["apply_state"] for s in v["scenes"]} == {"selected_not_applied"}
+        assert "visuals_not_applied" in {f["code"] for f in v["gates"]["g3"]["findings"]}
+
+        # 4. Validate, then apply at the validated revision (G1 goes out of date).
+        validated = view()
+        assert validated["report"]["render_ready"] is True, validated["report"]["errors"]
+        assert validated["report"]["unpublishable"] == []
+        r = c.post(f"{api}/visuals/apply",
+                   json={"expected_revision": validated["revision"], "reviewer": "Nguyễn Văn A",
+                         "confirm": True})  # fmt: skip
+        assert r.status_code == 200, r.text
+        assert r.json()["result"]["status"] == "published"
+        assert r.json()["result"]["rights_unverified"] == []
+        v = r.json()["visuals"]
+        assert {s["apply_state"] for s in v["scenes"]} == {"applied_current"}
+        assert v["gates"]["g1"]["status"] == "stale_after_apply"
+        assert all(a["rights_current"] and a["problem"] is None for a in v["assets"])
+        stale = c.post(f"{api}/visuals/apply",
+                       json={"expected_revision": validated["revision"],
+                             "reviewer": "Nguyễn Văn A", "confirm": True})  # fmt: skip
+        assert stale.status_code == 409 and stale.json()["error"]["code"] == "revision_conflict"
+
+        # 5. G1 again: the engine reports G3 ready and G1 approved.
+        approve()
+        v = view()
+        assert v["gates"]["g1"]["status"] == "approved"
+        assert v["gates"]["g3"] == {"status": "ready", "findings": []}, v["gates"]["g3"]
+        status = json.loads(_cli("production-status", f"--project-root={root}", "--json").stdout)
+        details = {s["stage"]: s["detail"] for s in status["stages"]}
+        assert details["draft"] == "G1 editorial: approved"
+        assert details["visuals"] == "G3 visuals: ready"
+
+        # An applied image is served at its hash; an outdated hash is image_changed.
+        a = v["assets"][0]
+        img = c.get(f"{api}/visuals/assets/{a['asset_id']}/image?sha256={a['sha256']}")
+        assert img.status_code == 200 and img.headers["etag"] == f'"{a["sha256"]}"', img.text
+        old = c.get(f"{api}/visuals/assets/{a['asset_id']}/image?sha256={'0' * 64}")
+        assert old.status_code == 409 and old.json()["error"]["code"] == "image_changed"
+
+        # Release: after draft-export, no visuals or image release blockers.
+        exported = _cli("draft-export", f"--project-root={root}")
+        assert exported.returncode == 0, exported.stderr
+        qa = json.loads(
+            _cli("production-check", f"--project-root={root}", "--mode", "release",
+                 "--json").stdout
+        )  # fmt: skip
+        image_codes = {"image_not_releasable", "fixture_image", "credit_incomplete"}
+        blockers = [
+            f for f in qa["blockers"] if f["stage"] == "visuals" or f["code"] in image_codes
+        ]
+        assert blockers == [], blockers
+
+        # A clearance does not survive a changed image: other bytes under the cleared
+        # candidate's name are refused, and G3 is no longer ready.
+        x = next(iter(picks.values()))
+        other = (
+            "global-temperature-anomaly.png"
+            if x["local_path"].endswith(".jpg")
+            else ("earth-apollo17.jpg")
+        )
+        (root / x["local_path"]).write_bytes((VISUALS / other).read_bytes())
+        v = view()
+        assert v["integrity"][x["id"]] == "mismatch"
+        assert v["gates"]["g3"]["status"] == "needs_review"
+        r = c.post(f"{api}/visuals/edit",
+                   json={"expected_revision": v["revision"], "operations": [ops[0]]})  # fmt: skip
+        assert r.status_code == 409 and r.json()["error"]["code"] == "image_integrity", r.text

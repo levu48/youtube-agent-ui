@@ -923,6 +923,10 @@ export const api = {
   ) => post<JobStarted>(`/projects/${encodeURIComponent(id)}/visuals/acquire`, body),
   visualsImport: (id: string, form: FormData) =>
     postForm<{ result: ImportResult; visuals: VisualsView }>(`/projects/${encodeURIComponent(id)}/visuals/import`, form),
+  visualsEdit: (id: string, body: { expected_revision: string; operations: VisualsOperation[]; dry_run?: boolean }) =>
+    post<{ result: VisualsEditResult; visuals?: VisualsView }>(`/projects/${encodeURIComponent(id)}/visuals/edit`, body),
+  visualsApply: (id: string, body: { expected_revision: string; reviewer: string; confirm: true }) =>
+    post<{ result: VisualsApplyResult; visuals: VisualsView }>(`/projects/${encodeURIComponent(id)}/visuals/apply`, body),
   eventsUrl: (id: string, after: number) =>
     `${BASE}/jobs/${encodeURIComponent(id)}/events?after=${after}`,
 };
@@ -1068,8 +1072,9 @@ export interface VisualsView {
   catalog_problems: string[];
   plan: { scenes: VisualPlanScene[] } | null;
   candidates: Record<string, VisualCandidate[]>;
-  selection: { scenes: { scene_id: string; shots: { candidate_id: string }[] }[] } | null;
-  clearance_history: unknown;
+  selection: VisualSelection | null;
+  clearance_history: ClearanceHistory | null;
+  clearance_history_problems?: string[];
   applied: Record<string, unknown> | null;
   integrity: Record<string, Integrity>;
   scenes: SceneState[];
@@ -1078,7 +1083,7 @@ export interface VisualsView {
   gates: { g1: VisualsGate; g3: VisualsGate };
   narration: Record<string, string>;
   network: { enabled: boolean; search_provider: "wikimedia" | "fixture" | string };
-  editing: { supported: boolean; reason: string | null };
+  editing: VisualsEditing;
   active_job_id: string | null;
 }
 
@@ -1120,3 +1125,95 @@ export interface ImportResult {
 }
 
 export const IMPORT_KINDS = ["archival", "document", "chart", "generated"] as const;
+
+// ---------------------------------------------------------------------- visuals edits (M4 UI-B)
+// Mirrors the engine's `visuals-edit` patch and `visuals-apply` result (engine D-123/D-124).
+
+export interface VisualsEditing {
+  supported: boolean;
+  reason: string | null;
+  /** The engine's exact clearance acknowledgement, shown verbatim. */
+  acknowledgement?: string;
+  bases?: string[];
+  motions?: string[];
+  fits?: string[];
+  max_shots?: number;
+}
+
+export interface ShotChoice {
+  candidate_id: string;
+  motion?: string;
+  fit?: string;
+  duration_seconds?: number;
+}
+
+export interface RightsClearance {
+  candidate_id: string;
+  decision?: string;
+  reviewer?: string;
+  decided_at?: string;
+  basis?: string;
+  justification?: string;
+  evidence?: string;
+  candidate_sha256?: string;
+  rights_fingerprint?: string;
+  evidence_sha256?: string | null;
+}
+
+export interface VisualSelection {
+  scenes: { scene_id: string; shots: ShotChoice[]; note?: string }[];
+  rights_clearances?: RightsClearance[];
+}
+
+export interface ClearanceHistoryEntry {
+  id: string;
+  seq: number;
+  action: "set" | "replaced" | "revoked" | string;
+  candidate_id: string;
+  at: string;
+  by_reviewer: string;
+  reason: string | null;
+  clearance: RightsClearance | null;
+}
+
+export interface ClearanceHistory {
+  schema_version?: string;
+  entries: ClearanceHistoryEntry[];
+}
+
+export type VisualsOperation =
+  | { op: "shots.set"; scene_id: string; shots: ShotChoice[] }
+  | { op: "shots.clear"; scene_id: string }
+  | {
+      op: "clearance.set";
+      candidate_id: string;
+      expected_candidate_sha256: string;
+      expected_rights_fingerprint: string;
+      reviewer: string;
+      basis: string;
+      justification: string;
+      evidence: string;
+      acknowledgement: string;
+    }
+  | { op: "clearance.revoke"; candidate_id: string; reviewer: string; reason: string }
+  | { op: "plan.update"; scene_id: string; search_query?: string; search_enabled?: boolean; generation_enabled?: boolean; notes?: string };
+
+export interface VisualsEditResult {
+  status: "published" | "already_current" | "would_publish";
+  dry_run: boolean;
+  previous_revision: string | null;
+  revision: string | null;
+  changed_files: string[];
+  history: { op_index: number; id: string; action: string; candidate_id: string }[];
+  check: Record<string, unknown> | null;
+}
+
+export interface VisualsApplyResult {
+  status: "published" | "already_current" | "images_restored";
+  scenes_changed: string[];
+  assets_added: string[];
+  assets_unchanged: string[];
+  rights_unverified: string[];
+  images_restored: string[];
+  revision: string | null;
+}

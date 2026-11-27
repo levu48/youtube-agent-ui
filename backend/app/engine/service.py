@@ -248,6 +248,28 @@ class EngineService:
         async with self._sem:
             return await self.cli.run(args, timeout=self.read_timeout * 2, stdin=data)
 
+    async def visuals_edit(
+        self, root: Path, patch: dict[str, Any], *, expect_revision: str, dry_run: bool = False
+    ) -> EngineResult:
+        """``visuals-edit --json`` with the patch on stdin (engine D-123). The engine checks the
+        revision, verifies every image it selects or clears under its lock, and publishes all
+        operations atomically, or writes nothing. A dry run writes nothing at all."""
+        args = commands.visuals_edit_args(root, expect_revision=expect_revision, dry_run=dry_run)
+        data = json.dumps(patch, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(data) > MAX_PATCH_BYTES:
+            raise commands.ArgumentError(f"the edit is larger than {MAX_PATCH_BYTES} bytes")
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout, stdin=data)
+
+    async def visuals_apply(
+        self, root: Path, *, expect_revision: str, reviewer: str
+    ) -> EngineResult:
+        """``visuals-apply --json``: re-hashes each candidate under the lock and installs the
+        content-addressed images; may take longer than a read."""
+        args = commands.visuals_apply_args(root, expect_revision=expect_revision, reviewer=reviewer)
+        async with self._sem:
+            return await self.cli.run(args, timeout=self.read_timeout * 2)
+
 
 class EngineReadError(RuntimeError):
     def __init__(self, code: str, message: str, diagnostic: str = "") -> None:

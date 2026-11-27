@@ -262,7 +262,8 @@ def test_the_view_is_one_engine_snapshot_and_writes_nothing(client, drafted, set
     assert v["gates"]["g1"]["status"] == "approved" and v["gates"]["g3"]["status"] == "pending"
     assert v["recovery_required"] is False and v["plan"] is None
     assert v["network"] == {"enabled": True, "search_provider": "fixture"}
-    assert v["editing"]["supported"] is False and "visuals-edit" in v["editing"]["reason"]
+    assert v["editing"]["supported"] is True and v["editing"]["reason"] is None
+    assert v["editing"]["acknowledgement"].startswith("I reviewed the source and licence")
     assert v["narration"]["scene-001"]  # the storyboard bytes the snapshot was built from
     assert "ok" not in v
     after = sorted(p.name for p in _root(settings).iterdir() if p.name != "visuals-calls.jsonl")

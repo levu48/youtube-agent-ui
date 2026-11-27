@@ -55,6 +55,8 @@ class EngineOp(StrEnum):
     VISUALS_PLAN = "visuals-plan"
     VISUALS_ACQUIRE = "visuals-acquire"
     VISUALS_IMPORT = "visuals-import"
+    VISUALS_EDIT = "visuals-edit"
+    VISUALS_APPLY = "visuals-apply"
 
 
 class ArgumentError(ValueError):
@@ -572,6 +574,28 @@ def visuals_import_args(root: Path, *, expect_revision: str, scene_id: str, kind
             url_host(value)
         argv.append(f"--{name.replace('_', '-')}={value}")
     return [*argv, _revision(expect_revision), "--json"]
+
+
+def visuals_edit_args(root: Path, *, expect_revision: str, dry_run: bool = False) -> list[str]:
+    """Shots, rights clearances, revocations and plan narrowing as one publication (engine
+    D-123); the JSON patch goes on stdin. ``--dry-run`` is read-only in the engine."""
+    argv = [EngineOp.VISUALS_EDIT.value, _root(root), _revision(expect_revision), "--json"]
+    if dry_run:
+        argv.append("--dry-run")
+    return argv
+
+
+def visuals_apply_args(root: Path, *, expect_revision: str, reviewer: str) -> list[str]:
+    """Apply the selection to the draft (a human action). Never ``--replace-shots`` or
+    ``--replace-assets``: hand-edited shots and assets are refused, never overwritten."""
+    who = clean_text("reviewer", reviewer, required=True)
+    return [
+        EngineOp.VISUALS_APPLY.value,
+        _root(root),
+        f"--reviewer={who}",
+        _revision(expect_revision),
+        "--json",
+    ]
 
 
 ALLOWED_SUBCOMMANDS = frozenset(op.value for op in EngineOp if op is not EngineOp.VERSION)
