@@ -4,7 +4,7 @@
 - **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
 - **UI-A is merged** (UI PR #16): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
 - **UI-B is merged** (UI PR #19, `71e7565`, after one review-correction round), against `26c608f`: selection, bound clearances with history and revocation, plan narrowing, validation and apply, and the real-engine G3 success test with public-domain images. The manual live Wikimedia smoke test is still to be recorded in [m4-verification.md](../m4-verification.md).
-- **Definition of done:** 12 of 14 items met (checked 2026-11-27, below). Open: the live smoke test (network item) and independent review records for UI PRs #16–#18 (review item).
+- **Definition of done:** 12 of 15 items met (checked 2026-11-27, below). Open: the live smoke test (network item), a manual accessibility acceptance pass, and independent review records for UI PRs #16–#18 (review item).
 - **V2 is split in two engine PRs.**
   - **V2a is merged:** engine PR #17 (D-123), merge commit `c089089`. It covers `visuals-edit`, the clearance history, and the decision that changed evidence invalidates a clearance.
   - **V2b is merged:** engine PR #18 (D-124), merge commit `26c608f`, now the pinned `ENGINE_REF`. It is the decision-5 G3 and release change.
@@ -550,11 +550,12 @@ Checked on 2026-11-27 against UI `main` @ `71e7565` and engine `26c608f`. Eviden
 - [x] Imports reach the engine only as bytes on stdin, size- and format-checked; no path crosses the boundary. Evidence: the UI-A import tests (stdin bytes, field order, 20 MB limit, magic bytes).
 - [x] Apply warns about G1 and leads to re-approval. G3 is shown as the engine reports it, never approved, inferred, strengthened or weakened by the UI. Evidence: the apply dialog's G1 warning and the re-approval link (frontend and E2E), and the gates panel showing G3 findings as reported, with no G3 approve control. The UI-A "not applied" note was removed once D-124 was pinned.
 - [x] The required real-engine test reaches `G3 visuals: ready` offline with genuinely licensed images, every scene `applied_current`, and no visuals release blockers after export. M1–M3 flows still pass, and CI and the real-engine script pass. Evidence: `test_g3_success_with_genuinely_licensed_images` (images in `backend/tests/fixtures/visuals/SOURCE.md`), the real-engine script at `26c608f`, and CI on PR #19.
-- [x] The gallery and forms meet WCAG 2.2 AA at all three widths, at 200% zoom and with reduced motion.
+- [x] Automated accessibility verification: the gallery and forms pass axe (WCAG 2.2 AA) at all three widths, at 200% zoom and with reduced motion. axe cannot establish full WCAG conformance, so manual acceptance is the separate item below.
   - Evidence: axe (WCAG 2.0–2.2 A and AA tags; no serious or critical issues allowed) runs on every visuals tab and every new dialog at 1440 px in the visuals journey. It also runs on every tab, the import form and the clearance form at 768 px, at 375 px, and at 200% zoom (a 640 px viewport) with reduced motion (`axeVisuals` in `frontend/e2e/app.spec.ts`), on the fake and the real engine.
   - The same tests check that nothing scrolls sideways at those sizes, and that animations are off with reduced motion.
   - The 375 px scan found one issue, which is fixed: the per-scene readiness table scrolled sideways without keyboard access (axe `scrollable-region-focusable`). It is now a labelled, focusable region.
-  - Automated checks do not catch every WCAG failure. No manual screen-reader pass has been recorded.
+  - The scans run on their own project (`visualsA11yProject`), set up through the API, so they do not depend on any other test.
+- [ ] Manual accessibility acceptance: keyboard-only use of the visuals journey (selection, the clearance and apply dialogs, focus order and focus return), screen-reader announcements (VoiceOver), and reflow at 200% and 400% zoom, recorded in [m4-verification.md](../m4-verification.md). **Open:** not done yet.
 - [ ] Each PR is reviewed, with no automatic merge.
   - Met: nothing was merged automatically; every merge followed the owner's explicit request.
   - Independent reviews: engine PRs #16 (three rounds), #17 and #18, and UI PR #19 (one correction round each for #17–#19).

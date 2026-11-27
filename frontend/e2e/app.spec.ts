@@ -39,11 +39,52 @@ async function animationsDone(el: Locator) {
   });
 }
 
+const A11Y = "visuals-a11y";
+
+/** The accessibility scans' own project, set up through the API (independent of every other
+ * test, so they never fail because another journey failed or changed): a fixture draft, G1, a
+ * plan, one imported image cleared with the engine's exact statement, selected and applied.
+ * Created once per run; later calls find it. */
+async function visualsA11yProject(page: Page) {
+  const p = `/projects/${A11Y}`;
+  if ((await page.request.get(`/api/v1${p}`)).ok()) return;
+  const api = await backend(page);
+  await api.post("/projects", { slug: A11Y, idea: "Bến cảng Sài Gòn đầu thế kỷ 20", language: "vi", duration_seconds: 180 });
+  await api.job(`${p}/draft-jobs`, { provider: "fixture" });
+  const { review_token } = await api.get(`${p}/draft`);
+  await api.post(`${p}/draft/approve`, { reviewer: "Nguyễn Văn A", confirm: true, review_token });
+  await api.job(`${p}/visuals/plan`, { expected_revision: (await api.get(`${p}/visuals`)).revision });
+  const imported = await api.form(`${p}/visuals/import`, {
+    expected_revision: (await api.get(`${p}/visuals`)).revision,
+    scene_id: "scene-001",
+    kind: "archival",
+    provenance: "Ảnh tôi tự chụp năm 2024, dùng cho dự án này.",
+    creator: "Nguyễn Văn A",
+    file: { name: "ben-cang.png", mimeType: "image/png", buffer: png(640, 360, [30, 90, 160]) },
+  });
+  const cid = imported.result.candidate_id as string;
+  const view = imported.visuals;
+  const c = view.candidates["scene-001"].find((x: { id: string }) => x.id === cid);
+  const edited = await api.post(`${p}/visuals/edit`, {
+    expected_revision: view.revision,
+    operations: [
+      {
+        op: "clearance.set", candidate_id: cid, expected_candidate_sha256: c.sha256,
+        expected_rights_fingerprint: c.rights_fingerprint, reviewer: "Nguyễn Văn A", basis: "own_work",
+        justification: "Tôi tự chụp ảnh này năm 2024 cho chính dự án này.", evidence: "https://project.example/ben-cang",
+        acknowledgement: view.editing.acknowledgement,
+      },
+      { op: "shots.set", scene_id: "scene-001", shots: [{ candidate_id: cid }] },
+    ],
+  });
+  await api.post(`${p}/visuals/apply`, { expected_revision: edited.visuals.revision, reviewer: "Nguyễn Văn A", confirm: true });
+}
+
 /** WCAG 2.2 AA on the visuals workspace at the current viewport: every tab, and the import and
- * clearance forms (each opened and closed without saving). Uses the project the visuals journey
- * left behind (planned, searched, one image imported, cleared and applied). */
+ * clearance forms (each opened and closed without saving), on the scans' own project. */
 async function axeVisuals(page: Page) {
-  await page.goto("/projects/visuals-demo/visuals");
+  await visualsA11yProject(page);
+  await page.goto(`/projects/${A11Y}/visuals`);
   await expect(page.getByRole("heading", { level: 1, name: "Visuals" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Scenes and candidates" })).toBeVisible({ timeout: 30_000 });
   for (const tab of ["Scenes and candidates", "Validate and apply", "Applied images", "Engine report"]) {
@@ -593,7 +634,12 @@ async function backend(page: Page) {
     const { job_id } = await call("POST", path, data);
     await expect.poll(async () => (await call("GET", `/jobs/${job_id}`)).status, { timeout: 90_000 }).toBe("succeeded");
   };
-  return { get: (path: string) => call("GET", path), post: (path: string, data: unknown) => call("POST", path, data), job };
+  const form = async (path: string, multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }>) => {
+    const r = await page.request.fetch(`/api/v1${path}`, { method: "POST", multipart, headers: { "X-CSRF-Token": token, Origin: origin } });
+    expect(r.ok(), `POST ${path}: ${await r.text()}`).toBe(true);
+    return r.json();
+  };
+  return { get: (path: string) => call("GET", path), post: (path: string, data: unknown) => call("POST", path, data), job, form };
 }
 
 test("G2: validate, approve the validated revision, apply, approve G1 again, export", async ({ page }) => {
@@ -911,7 +957,8 @@ for (const [name, width, height] of [
 ] as const) {
   test(`responsive layout at ${name} (${width}px)`, async ({ page }) => {
     await page.setViewportSize({ width, height });
-    for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft", "/projects/visuals-demo/visuals"]) {
+    await visualsA11yProject(page); // its own project: no dependency on other tests
+    for (const path of ["/", "/projects/new", `/projects/${A11Y}`, `/projects/${A11Y}/draft`, `/projects/${A11Y}/visuals`]) {
       await page.goto(path);
       await expect(page.locator("h1").first()).toBeVisible();
       await page.waitForLoadState("networkidle");
@@ -934,7 +981,8 @@ test("200% zoom and reduced motion keep core flows usable", async ({ page }) => 
   await page.emulateMedia({ reducedMotion: "reduce" });
   // 200% zoom of a 1280px window is equivalent to a 640px CSS viewport.
   await page.setViewportSize({ width: 640, height: 450 });
-  for (const path of ["/", "/projects/new", "/projects/hcm-demo", "/projects/hcm-demo/draft", "/projects/visuals-demo/visuals"]) {
+  await visualsA11yProject(page);
+  for (const path of ["/", "/projects/new", `/projects/${A11Y}`, `/projects/${A11Y}/draft`, `/projects/${A11Y}/visuals`]) {
     await page.goto(path);
     await expect(page.locator("h1").first()).toBeVisible();
     await page.waitForLoadState("networkidle");
