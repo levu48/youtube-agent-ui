@@ -369,7 +369,7 @@ def test_the_shared_bytes_refusal_is_shown_with_the_engine_items(client, importe
     fake_cli.env["FAKE_MODE"] = "visuals_apply_not_ready"
     r = _apply(client)
     assert r.status_code == 409 and r.json()["error"]["code"] == "not_ready"
-    assert "two different rights records" in r.json()["error"]["details"]["errors"][0]
+    assert "different provenance or rights" in r.json()["error"]["details"]["errors"][0]
 
 
 def test_apply_refuses_changed_candidate_bytes(client, imported, settings):
@@ -402,3 +402,45 @@ def test_the_engine_calls_never_include_force_or_replace_flags(client, imported,
     for argv in (json.loads(x)["argv"] for x in lines):
         commands.assert_allowlisted(argv)
     assert {"visuals-edit", "visuals-apply"} <= set(_calls(settings))
+
+
+# --------------------------------------------------------------------------- review fixes
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"dry_run": "false"},
+        {"dry_run": 0},
+        {"expected_revision": None},
+    ],
+)
+def test_review_the_edit_envelope_is_strict(client, acquired, settings, body):
+    """FIX-05: a wrong JSON type in the envelope is refused, never coerced."""
+    before = _writes(settings)
+    req = {"expected_revision": _rev(client),
+           "operations": [{"op": "shots.clear", "scene_id": "scene-001"}], **body}  # fmt: skip
+    r = client.post(f"{API}/visuals/edit", json=req)
+    assert r.status_code == 422, r.text
+    assert _writes(settings) == before
+
+
+@pytest.mark.parametrize("confirm", ["true", 1, "yes"])
+def test_review_the_apply_envelope_is_strict(client, acquired, settings, confirm):
+    before = _writes(settings)
+    body = {"expected_revision": _rev(client), "reviewer": "Lan Nguyen", "confirm": confirm}
+    r = client.post(f"{API}/visuals/apply", json=body)
+    assert r.status_code == 422, r.text
+    body = {**body, "reviewer": 7, "confirm": True}
+    assert client.post(f"{API}/visuals/apply", json=body).status_code == 422
+    assert _writes(settings) == before
+
+
+def test_review_a_generic_not_ready_keeps_the_engine_items(client, imported, fake_cli):
+    _select_all(client, imported)
+    fake_cli.env["FAKE_MODE"] = "visuals_apply_not_ready_errors"
+    r = _apply(client)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "not_ready"
+    assert r.json()["error"]["details"]["errors"] == [
+        "scene-002: candidate scene-002-cm-0123456789 is rejected and cannot be used"
+    ]

@@ -1,6 +1,6 @@
 "use client";
 
-import { ShieldCheck } from "lucide-react";
+import { RefreshCw, ShieldCheck } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 
@@ -77,10 +77,19 @@ export function ClearanceDialog({
   const ack = view.editing.acknowledgement ?? "";
   const [f, setF] = useState({ reviewer: "", basis: "", justification: "", evidence: "" });
   const [agreed, setAgreed] = useState(false);
+  // The reviewer attests to the image they saw: nothing can be recorded until the browser has
+  // displayed these exact, hash-verified bytes. A failure withdraws the statement.
+  const [shown, setShown] = useState<"loading" | "loaded" | "failed">("loading");
+  const [attempt, setAttempt] = useState(0);
   const changed = targetChange(target, view);
   const missing = missingEvidence(c);
   const url = candidateImageUrl(projectId, { id: c.id, sha256: target.sha256 });
-  const problem = !f.reviewer.trim()
+  const problem =
+    shown !== "loaded"
+      ? shown === "failed"
+        ? "The image could not be shown: retry it. You can only clear an image you have seen."
+        : "Waiting for the image to load."
+      : !f.reviewer.trim()
     ? "Enter your name."
     : !f.basis
       ? "Choose the basis of your decision."
@@ -127,11 +136,36 @@ export function ClearanceDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div className="flex aspect-video items-center justify-center overflow-hidden rounded bg-surface-muted">
-            {url ? (
+            {url && shown !== "failed" ? (
               // eslint-disable-next-line @next/next/no-img-element -- verified bytes from the backend, by hash
-              <img src={url} alt={`${c.title ?? c.id}: the image being cleared`} className="max-h-full object-contain" />
+              <img
+                key={attempt}
+                src={url}
+                alt={`${c.title ?? c.id}: the image being cleared`}
+                className="max-h-full object-contain"
+                onLoad={() => setShown("loaded")}
+                onError={() => {
+                  setShown("failed");
+                  setAgreed(false);
+                }}
+              />
             ) : null}
           </div>
+          {shown === "failed" ? (
+            <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-red-200 bg-red-50 p-2 text-sm text-danger">
+              <span>The image could not be loaded, so it cannot be cleared. It may have changed or been removed.</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setShown("loading");
+                  setAttempt((n) => n + 1);
+                }}
+              >
+                <RefreshCw aria-hidden /> Retry the image
+              </Button>
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             Image <code className="font-mono">{target.sha256.slice(0, 12)}</code>. Source:{" "}
             {c.source_page_url ? (
@@ -193,7 +227,14 @@ export function ClearanceDialog({
             <p className="text-sm font-medium">Statement (the engine&apos;s exact words)</p>
             <blockquote className="border-l-4 pl-3 text-sm">{ack}</blockquote>
             <div className="flex items-start gap-2">
-              <input id={`${id}-ack`} type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1 size-4" />
+              <input
+                id={`${id}-ack`}
+                type="checkbox"
+                checked={agreed}
+                disabled={shown !== "loaded"}
+                onChange={(e) => setAgreed(e.target.checked)}
+                className="mt-1 size-4"
+              />
               <Label htmlFor={`${id}-ack`} className="font-normal">
                 I make this statement, as written above.
               </Label>

@@ -153,10 +153,9 @@ describe("rights clearance", () => {
     expect(within(c1).queryByRole("button", { name: /Clear rights…: File:Harbour/ })).not.toBeInTheDocument(); // accepted: nothing to clear
     await user.click(within(c1).getByRole("button", { name: /Clear rights…: Card import/ }));
     const dialog = await screen.findByRole("dialog", { name: "Record a rights clearance" });
-    expect(within(dialog).getByRole("img", { name: /Card import: the image being cleared/ })).toHaveAttribute(
-      "src",
-      `/api/v1/projects/p1/visuals/candidates/scene-001-imp-abcdefabcd/image?sha256=${SHA2}`,
-    );
+    const shown = within(dialog).getByRole("img", { name: /Card import: the image being cleared/ });
+    expect(shown).toHaveAttribute("src", `/api/v1/projects/p1/visuals/candidates/scene-001-imp-abcdefabcd/image?sha256=${SHA2}`);
+    fireEvent.load(shown); // the reviewer has seen these exact bytes
     expect(within(dialog).getByText(ACK)).toBeInTheDocument();
     expect(within(dialog).getByText(/missing: licence name, creator, source URL/)).toBeInTheDocument();
     const box = within(dialog).getByRole("checkbox", { name: /I make this statement/ });
@@ -209,6 +208,7 @@ describe("rights clearance", () => {
     const c1 = await card("scene-001");
     await user.click(within(c1).getByRole("button", { name: /Clear rights…: Card import/ }));
     const dialog = await screen.findByRole("dialog");
+    fireEvent.load(within(dialog).getByRole("img"));
     await user.type(within(dialog).getByLabelText(/^Reviewer/), "Lan Nguyen");
     await user.selectOptions(within(dialog).getByLabelText(/^Basis/), "own_work");
     await user.type(within(dialog).getByLabelText(/^Justification/), "The project team drew this card itself for this video.");
@@ -304,7 +304,7 @@ describe("validation and apply", () => {
   it("shows the shared-bytes refusal with the engine's items and the fix", async () => {
     const { user } = setup({
       "POST /projects/p1/visuals/apply": () => ({ status: 409, json: { error: { code: "not_ready", message: "cannot apply visuals:", details: {
-        errors: ["img-0123456789abcdef would get two different rights records (scenes scene-001, scene-002)"] } } } }),
+        errors: ["scene-001-imp-a and scene-002-imp-b have identical image bytes (asset img-0123456789abcdef) but different provenance or rights, and one asset record cannot carry both: select only one of them"] } } } }),
     }, selected());
     await user.click(await screen.findByRole("tab", { name: "Validate and apply" }));
     await user.click(screen.getByRole("button", { name: /Validate visuals/ }));
@@ -313,7 +313,7 @@ describe("validation and apply", () => {
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText(/^Reviewer/), "Lan Nguyen");
     await user.click(within(dialog).getByRole("button", { name: /^Apply selection$/ }));
-    expect(await within(dialog).findByText(/two different rights records/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/different provenance or rights, and one asset record/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Choose a compatible candidate, or new shots for every scene/)).toBeInTheDocument();
   });
 });
@@ -329,5 +329,141 @@ describe("engine facts", () => {
     }));
     for (const s of states) expect(await screen.findByText(APPLY_STATE[s].label)).toBeInTheDocument();
     expect(RIGHTS_REASON.evidence_changed).toMatch(/evidence document/);
+  });
+});
+
+
+describe("review fixes", () => {
+  const selected = () =>
+    view({ selection: { scenes: [{ scene_id: "scene-001", shots: [{ candidate_id: "scene-001-cm-0123456789" }] }], rights_clearances: [] },
+      scenes: [{ scene_id: "scene-001", apply_state: "selected_not_applied", draft_shots: [], selection_shots: null, applied_shots: null }] });
+
+  it("FIX-01: a failed validation never enables apply, even with cached data", async () => {
+    let fail = false;
+    const { user } = setup({
+      "GET /projects/p1/visuals": () =>
+        fail ? { status: 503, json: { error: { code: "state_unavailable", message: "The engine's visuals state could not be read." } } } : { json: selected() },
+    });
+    await user.click(await screen.findByRole("tab", { name: "Validate and apply" }));
+    const apply = screen.getByRole("button", { name: /Apply selection…/ });
+    await user.click(screen.getByRole("button", { name: /Validate visuals/ }));
+    await waitFor(() => expect(apply).toBeEnabled());
+    fail = true; // the next read fails; the cache still holds the old snapshot
+    await user.click(screen.getByRole("button", { name: /Validate visuals/ }));
+    // The page never shows the old snapshot as current: it shows the failure instead.
+    expect(await screen.findByText("The visuals could not be loaded")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Apply selection…/ })).not.toBeInTheDocument();
+    fail = false;
+    await user.click(screen.getByRole("button", { name: /Retry/ }));
+    await user.click(await screen.findByRole("tab", { name: "Validate and apply" }));
+    // The failed validation was not kept: apply needs a new, successful one.
+    expect(screen.getByRole("button", { name: /Apply selection…/ })).toBeDisabled();
+    expect(screen.getByText("Validate the visuals first.")).toBeInTheDocument();
+  });
+
+  it("FIX-02: a changed saved selection never replaces unsaved shots; the reviewer chooses", async () => {
+    let current = view();
+    const { calls, user } = setup({ "POST /projects/p1/visuals/edit": () => ({ json: { result: EDITED, visuals: current } }) }, () => current);
+    let c1 = await card("scene-001");
+    await user.click(within(c1).getByRole("button", { name: /Use as a shot: File:Harbour/ }));
+    expect(within(c1).getByText(/^Shot 1:/)).toBeInTheDocument();
+    // The CLI saves another selection for the same scene; the page refreshes.
+    current = view({ revision: REV2, selection: { scenes: [{ scene_id: "scene-001", shots: [{ candidate_id: MANUAL.id }] }], rights_clearances: [] } });
+    await user.click(screen.getByRole("button", { name: /Check visuals/ }));
+    c1 = await card("scene-001");
+    const alert = await within(c1).findByRole("alert");
+    expect(alert).toHaveTextContent(/changed while you were editing/);
+    expect(alert).toHaveTextContent(/Card import/); // the new saved selection is named
+    expect(within(c1).getByText(/^Shot 1:/).parentElement).toHaveTextContent("File:Harbour 1902.jpg"); // kept
+    expect(within(c1).getByRole("button", { name: /Save selection/ })).toBeDisabled();
+    await user.click(within(alert).getByRole("button", { name: /Keep my list/ }));
+    await user.click(within(c1).getByRole("button", { name: /Save selection/ }));
+    await waitFor(() => expect(posts(calls, "/projects/p1/visuals/edit")).toHaveLength(1));
+    expect(posts(calls, "/projects/p1/visuals/edit")[0].body).toMatchObject({
+      expected_revision: REV2,
+      operations: [{ op: "shots.set", scene_id: "scene-001", shots: [{ candidate_id: "scene-001-cm-0123456789" }] }],
+    });
+  });
+
+  it("FIX-02: loading the saved selection drops the reviewer's list only when asked", async () => {
+    let current = view();
+    const { user } = setup({}, () => current);
+    let c1 = await card("scene-001");
+    await user.click(within(c1).getByRole("button", { name: /Use as a shot: File:Harbour/ }));
+    current = view({ revision: REV2, selection: { scenes: [{ scene_id: "scene-001", shots: [{ candidate_id: MANUAL.id }] }], rights_clearances: [] } });
+    await user.click(screen.getByRole("button", { name: /Check visuals/ }));
+    c1 = await card("scene-001");
+    await user.click(await within(c1).findByRole("button", { name: /Load the saved selection/ }));
+    expect(within(c1).getByText(/^Shot 1:/).parentElement).toHaveTextContent("Card import");
+    expect(within(c1).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("FIX-03: a clearance cannot be recorded for an image that did not load", async () => {
+    const { user } = setup();
+    const c1 = await card("scene-001");
+    await user.click(within(c1).getByRole("button", { name: /Clear rights…: Card import/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Record a rights clearance" });
+    await user.type(within(dialog).getByLabelText(/^Reviewer/), "Lan Nguyen");
+    await user.selectOptions(within(dialog).getByLabelText(/^Basis/), "own_work");
+    await user.type(within(dialog).getByLabelText(/^Justification/), "The project team drew this card itself for this video.");
+    await user.type(within(dialog).getByLabelText(/^Evidence/), "permissions/card.txt");
+    const box = within(dialog).getByRole("checkbox", { name: /I make this statement/ });
+    expect(box).toBeDisabled(); // not loaded yet
+    expect(within(dialog).getByText("Waiting for the image to load.")).toBeInTheDocument();
+    fireEvent.error(within(dialog).getByRole("img"));
+    expect(await within(dialog).findByText(/could not be loaded, so it cannot be cleared/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Record clearance/ })).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: /Retry the image/ }));
+    fireEvent.load(within(dialog).getByRole("img"));
+    await user.click(box);
+    expect(within(dialog).getByRole("button", { name: /Record clearance/ })).toBeEnabled();
+  });
+
+  it("FIX-04: nothing can be edited while a save is running", async () => {
+    let release: (v: { json: unknown }) => void = () => {};
+    const { user } = setup({ "POST /projects/p1/visuals/edit": () => new Promise((r) => (release = r)) });
+    const c1 = await card("scene-001");
+    await user.click(within(c1).getByRole("button", { name: /Use as a shot: File:Harbour/ }));
+    await user.click(within(c1).getByRole("button", { name: /Save selection/ }));
+    expect(await within(c1).findByRole("button", { name: /Saving…/ })).toBeDisabled();
+    expect(within(c1).getByRole("button", { name: "Remove shot 1" })).toBeDisabled();
+    expect(within(c1).getByLabelText("Motion")).toBeDisabled();
+    expect(within(c1).getByRole("button", { name: /Use as a shot: Card import/ })).toBeDisabled();
+    expect(within(c1).getByRole("button", { name: /Discard changes/ })).toBeDisabled();
+    release({ json: { result: EDITED, visuals: view() } });
+    await waitFor(() => expect(within(c1).getByRole("button", { name: /Use as a shot: Card import/ })).toBeEnabled());
+  });
+
+  it("FIX-06: unsaved shots survive switching tabs, and validation warns about them", async () => {
+    const { user } = setup({}, selected());
+    let c1 = await card("scene-001");
+    await user.click(within(c1).getByRole("button", { name: /Use as a shot: Card import/ }));
+    await user.click(screen.getByRole("tab", { name: "Validate and apply" }));
+    const warning = screen.getByText(/Unsaved shot changes in scene-001/);
+    expect(warning).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Validate visuals/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Validate visuals/ })).toBeEnabled());
+    expect(screen.getByRole("button", { name: /Apply selection…/ })).toBeDisabled();
+    expect(screen.getByText("Save or discard the unsaved shot changes first.")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Scenes and candidates" }));
+    c1 = await card("scene-001");
+    expect(within(c1).getByText(/^Shot 2:/).parentElement).toHaveTextContent("Card import");
+    expect(within(c1).getByText("(unsaved changes)")).toBeInTheDocument();
+  });
+
+  it("FIX-07: a not_ready that is not the shared-image conflict is shown in the engine's words only", async () => {
+    const { user } = setup({
+      "POST /projects/p1/visuals/apply": () => ({ status: 409, json: { error: { code: "not_ready", message: "cannot apply visuals:", details: {
+        errors: ["scene-002: candidate scene-002-cm-0123456789 is rejected and cannot be used"] } } } }),
+    }, selected());
+    await user.click(await screen.findByRole("tab", { name: "Validate and apply" }));
+    await user.click(screen.getByRole("button", { name: /Validate visuals/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Apply selection…/ })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /Apply selection…/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/^Reviewer/), "Lan Nguyen");
+    await user.click(within(dialog).getByRole("button", { name: /^Apply selection$/ }));
+    expect(await within(dialog).findByText(/is rejected and cannot be used/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/same image/)).not.toBeInTheDocument(); // no shared-image explanation, old or new wording
   });
 });

@@ -9,38 +9,35 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { VisualsError } from "@/components/visuals/visuals-error";
 import { useVisualsEdit } from "@/hooks/use-visuals-edit";
+import type { SceneDrafts } from "@/hooks/use-scene-drafts";
 import type { ShotChoice, VisualPlanScene, VisualsOperation, VisualsView } from "@/lib/api";
 import { humanize } from "@/lib/status";
 
-export function savedShots(view: VisualsView, sceneId: string): ShotChoice[] {
-  return view.selection?.scenes.find((s) => s.scene_id === sceneId)?.shots ?? [];
-}
-
-const same = (a: ShotChoice[], b: ShotChoice[]) => JSON.stringify(a) === JSON.stringify(b);
-
 /** The scene's shots as the reviewer is choosing them: one ordered list, saved with one
- * `visuals-edit` (`shots.set`, or `shots.clear` for none). Nothing is saved until Save. */
+ * `visuals-edit` (`shots.set`, or `shots.clear` for none). Nothing is saved until Save, and the
+ * list is kept by the page (`useSceneDrafts`), so it survives tab switches and refreshes. While
+ * a save runs, every control is disabled, so no edit can be made against a list in flight. */
 export function ShotEditor({
   view,
   projectId,
   sceneId,
-  draft,
-  setDraft,
+  drafts,
   block,
 }: {
   view: VisualsView;
   projectId: string;
   sceneId: string;
-  draft: ShotChoice[];
-  setDraft: (s: ShotChoice[]) => void;
+  drafts: SceneDrafts;
   block: string | null;
 }) {
   const id = useId();
   const edit = useVisualsEdit(projectId, view.revision);
-  const saved = savedShots(view, sceneId);
-  const dirty = !same(draft, saved);
+  const d = drafts.get(sceneId);
+  const draft = d.shots;
+  const setDraft = (next: ShotChoice[]) => drafts.set(sceneId, next);
   const max = view.editing.max_shots ?? 20;
   const titles = new Map((view.candidates[sceneId] ?? []).map((c) => [c.id, c.title ?? c.id]));
+  const locked = d.saving || Boolean(block);
   const update = (i: number, patch: Partial<ShotChoice>) => {
     const next = draft.map((s, n) => {
       if (n !== i) return s;
@@ -50,27 +47,54 @@ export function ShotEditor({
     });
     setDraft(next);
   };
-  const move = (i: number, d: number) => {
+  const move = (i: number, dir: number) => {
     const next = [...draft];
-    [next[i], next[i + d]] = [next[i + d], next[i]];
+    [next[i], next[i + dir]] = [next[i + dir], next[i]];
     setDraft(next);
   };
   const save = async () => {
     const op: VisualsOperation = draft.length ? { op: "shots.set", scene_id: sceneId, shots: draft } : { op: "shots.clear", scene_id: sceneId };
+    drafts.setSaving(sceneId, true);
     try {
       const r = await edit.run([op]);
+      drafts.discard(sceneId); // saved: the scene now follows the engine's selection again
       toast.success(r.status === "already_current" ? "Nothing changed" : `Selection saved for ${sceneId}`);
     } catch {
-      // shown below
+      // shown below; the reviewer's list is kept
+    } finally {
+      drafts.setSaving(sceneId, false);
     }
   };
   const tooMany = draft.length > max;
-  const reason = block ?? (tooMany ? `At most ${max} shots per scene.` : null);
+  const reason =
+    block ??
+    (d.conflict
+      ? "The saved selection changed: choose which list to keep first."
+      : tooMany
+        ? `At most ${max} shots per scene.`
+        : null);
   return (
-    <section aria-labelledby={`${id}-h`} className="space-y-2 rounded-lg border p-3">
+    <section aria-labelledby={`${id}-h`} aria-busy={d.saving} className="space-y-2 rounded-lg border p-3">
       <h4 id={`${id}-h`} className="text-sm font-semibold">
-        Shots for {sceneId} {dirty ? <span className="font-normal text-warning">(unsaved changes)</span> : null}
+        Shots for {sceneId} {d.dirty ? <span className="font-normal text-warning">(unsaved changes)</span> : null}
       </h4>
+      {d.conflict ? (
+        <div role="alert" className="space-y-2 rounded border border-amber-300 bg-amber-50 p-2 text-sm">
+          <p className="text-warning">
+            The saved selection for {sceneId} changed while you were editing (the CLI, a job or another tab). Your list is kept below;
+            nothing was saved. The saved selection is now:{" "}
+            {d.saved.length ? d.saved.map((x) => titles.get(x.candidate_id) ?? x.candidate_id).join(", ") : "no shots"}.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => drafts.keepMine(sceneId)} disabled={locked}>
+              Keep my list (then save it)
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => drafts.discard(sceneId)} disabled={locked}>
+              Load the saved selection
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {draft.length ? (
         <ol className="space-y-2">
           {draft.map((s, i) => (
@@ -79,20 +103,31 @@ export function ShotEditor({
                 <span className="font-medium">Shot {i + 1}:</span> {titles.get(s.candidate_id) ?? s.candidate_id}
               </span>
               <div className="flex flex-wrap items-center gap-1">
-                <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={i === 0} aria-label={`Move shot ${i + 1} up`}>
+                <Button size="icon-sm" variant="ghost" onClick={() => move(i, -1)} disabled={locked || i === 0} aria-label={`Move shot ${i + 1} up`}>
                   <ArrowUp aria-hidden />
                 </Button>
-                <Button size="icon-sm" variant="ghost" onClick={() => move(i, 1)} disabled={i === draft.length - 1} aria-label={`Move shot ${i + 1} down`}>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={() => move(i, 1)}
+                  disabled={locked || i === draft.length - 1}
+                  aria-label={`Move shot ${i + 1} down`}
+                >
                   <ArrowDown aria-hidden />
                 </Button>
-                <Button size="icon-sm" variant="ghost" onClick={() => setDraft(draft.filter((_, n) => n !== i))} aria-label={`Remove shot ${i + 1}`}>
+                <Button size="icon-sm" variant="ghost" onClick={() => setDraft(draft.filter((_, n) => n !== i))} disabled={locked} aria-label={`Remove shot ${i + 1}`}>
                   <X aria-hidden />
                 </Button>
               </div>
               <div className="flex flex-wrap gap-2 sm:col-span-2">
                 <label className="flex items-center gap-1 text-xs">
                   Motion
-                  <select value={s.motion ?? ""} onChange={(e) => update(i, { motion: e.target.value || undefined })} className="rounded border bg-surface px-1 py-0.5">
+                  <select
+                    value={s.motion ?? ""}
+                    onChange={(e) => update(i, { motion: e.target.value || undefined })}
+                    disabled={locked}
+                    className="rounded border bg-surface px-1 py-0.5"
+                  >
                     <option value="">Engine default</option>
                     {(view.editing.motions ?? []).map((m) => (
                       <option key={m} value={m}>
@@ -103,7 +138,12 @@ export function ShotEditor({
                 </label>
                 <label className="flex items-center gap-1 text-xs">
                   Fit
-                  <select value={s.fit ?? ""} onChange={(e) => update(i, { fit: e.target.value || undefined })} className="rounded border bg-surface px-1 py-0.5">
+                  <select
+                    value={s.fit ?? ""}
+                    onChange={(e) => update(i, { fit: e.target.value || undefined })}
+                    disabled={locked}
+                    className="rounded border bg-surface px-1 py-0.5"
+                  >
                     <option value="">Engine default</option>
                     {(view.editing.fits ?? []).map((m) => (
                       <option key={m} value={m}>
@@ -121,6 +161,7 @@ export function ShotEditor({
                     step={0.5}
                     value={s.duration_seconds ?? ""}
                     onChange={(e) => update(i, { duration_seconds: e.target.value ? Number(e.target.value) : undefined })}
+                    disabled={locked}
                     className="h-7 w-20"
                     placeholder="auto"
                   />
@@ -134,10 +175,10 @@ export function ShotEditor({
       )}
       <VisualsError error={edit.error} onReload={() => void edit.reload()} />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => void save()} disabled={!dirty || Boolean(reason) || edit.pending}>
-          <Save aria-hidden /> {edit.pending ? "Saving…" : draft.length ? "Save selection" : "Clear the selection"}
+        <Button size="sm" onClick={() => void save()} disabled={!d.dirty || Boolean(reason) || d.saving}>
+          <Save aria-hidden /> {d.saving ? "Saving…" : draft.length ? "Save selection" : "Clear the selection"}
         </Button>
-        <Button size="sm" variant="outline" onClick={() => setDraft(saved)} disabled={!dirty || edit.pending}>
+        <Button size="sm" variant="outline" onClick={() => drafts.discard(sceneId)} disabled={!d.dirty || d.saving}>
           <Undo2 aria-hidden /> Discard changes
         </Button>
         {reason ? <span className="text-xs text-muted-foreground">{reason}</span> : null}

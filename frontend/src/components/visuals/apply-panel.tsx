@@ -36,15 +36,19 @@ export function ApplyPanel({
   block,
   onValidate,
   validated,
+  unsaved = [],
 }: {
   view: VisualsView;
   projectId: string;
   block: string | null;
-  onValidate: () => Promise<string | null>;
+  onValidate: () => Promise<{ revision: string | null; error: string | null }>;
   validated: string | null;
+  /** Scenes with an unsaved shot list: validation and apply only ever see the saved one. */
+  unsaved?: string[];
 }) {
   const [open, setOpen] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const [result, setResult] = useState<VisualsApplyResult | null>(null);
   const r = view.report;
   const scenes = (r.scenes as SceneReport[]) ?? [];
@@ -54,7 +58,11 @@ export function ApplyPanel({
   const nothing = !view.selection?.scenes.some((s) => s.shots?.length);
   const reason =
     block ??
-    (nothing
+    (checking
+      ? "Validating…"
+      : unsaved.length
+        ? "Save or discard the unsaved shot changes first."
+        : nothing
       ? "Nothing is selected yet."
       : !validated
         ? "Validate the visuals first."
@@ -65,8 +73,12 @@ export function ApplyPanel({
             : null);
   const validate = async () => {
     setChecking(true);
+    setFailed(null);
     try {
-      await onValidate();
+      const r = await onValidate();
+      setFailed(r.error);
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : "Validation failed.");
     } finally {
       setChecking(false);
     }
@@ -100,6 +112,17 @@ export function ApplyPanel({
             `Validated at revision ${validated!.slice(0, 12)}: apply writes the selection into the draft's shots and assets.`}
         </p>
       </div>
+      {unsaved.length ? (
+        <p role="alert" className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-warning">
+          Unsaved shot changes in {unsaved.join(", ")}. Validation and apply use only the saved selection: save or discard those
+          changes in Scenes and candidates first.
+        </p>
+      ) : null}
+      {failed ? (
+        <p role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-sm text-danger">
+          Validation failed: {failed} Nothing is validated; the report below may be out of date.
+        </p>
+      ) : null}
       {view.recovery_required ? <p className="text-sm text-danger">The report below is {NOT_CERTIFIED}.</p> : null}
       <p className="text-sm">
         Render ready (engine evaluation): <strong>{r.render_ready ? "yes" : "no"}</strong>
@@ -216,7 +239,10 @@ function ApplyDialog({
   });
   const changed = view.revision !== revision ? "The visuals changed since you validated them: close this and validate again." : null;
   const reason = block ?? changed ?? (!reviewer.trim() ? "Enter your name." : null);
-  const shared = m.error instanceof ApiError && m.error.code === "not_ready";
+  // The shared-image explanation only when the engine's own items name that conflict; any other
+  // not_ready is shown in the engine's words alone.
+  const items = m.error instanceof ApiError && Array.isArray(m.error.details?.errors) ? (m.error.details.errors as unknown[]).map(String) : [];
+  const shared = m.error instanceof ApiError && m.error.code === "not_ready" && items.some((x) => x.includes("different provenance"));
   return (
     <Dialog open onOpenChange={(o) => (o ? null : onClose())}>
       <DialogContent className="max-w-xl">
@@ -240,8 +266,8 @@ function ApplyDialog({
           <LineField label="Reviewer" value={reviewer} onChange={setReviewer} required hint={REVIEWER_HINT} />
           {shared ? (
             <p className="text-sm">
-              Another scene still shows the same image under different rights. Choose a compatible candidate, or new shots for every
-              scene the engine names below.
+              Two candidates share the same image bytes under different provenance or rights. Choose a compatible candidate, or new
+              shots for every scene the engine names below.
             </p>
           ) : null}
           <VisualsError error={m.error} onReload={() => void qc.invalidateQueries({ queryKey: qk.visuals(projectId) })} />

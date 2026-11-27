@@ -14,7 +14,7 @@ import re
 import unicodedata
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.engine import commands
 
@@ -124,7 +124,8 @@ Operation = Annotated[
 
 
 class VisualsEditRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Strict like the operations: a JSON string is never coerced into the boolean ``dry_run``.
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     expected_revision: str = Field(pattern=HEX64)
     operations: Annotated[list[Operation], Field(min_length=1, max_length=MAX_OPERATIONS)]
@@ -138,8 +139,15 @@ class VisualsEditRequest(BaseModel):
 
 
 class VisualsApplyRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
     expected_revision: str = Field(pattern=HEX64)
     reviewer: Reviewer
     confirm: Literal[True]
+
+    @field_validator("confirm", mode="before")
+    @classmethod
+    def _true(cls, v: object) -> object:
+        if v is not True:  # 1 == True in Python: only the JSON boolean true confirms
+            raise ValueError("confirm must be the JSON boolean true")
+        return v

@@ -981,9 +981,15 @@ def _apply(root: Path, o: dict, mode: str) -> int:
         return refused
     if not o.get("reviewer"):
         return _error("invalid_input", 2, "--reviewer is required")
+    if mode == "visuals_apply_not_ready_errors":  # a not_ready that is not the shared-bytes one
+        msg = "scene-002: candidate scene-002-cm-0123456789 is rejected and cannot be used"
+        return _error(
+            "not_ready", 2, f"cannot apply visuals:\n  - {msg}", details={"errors": [msg]}
+        )
     if mode == "visuals_apply_not_ready":
-        msg = ("img-0123456789abcdef would get two different rights records (scene-001-imp-a, "
-               "scene-002-imp-b; scenes scene-001, scene-002)")  # fmt: skip
+        msg = ("scene-001-imp-a and scene-002-imp-b have identical image bytes (asset "
+               "img-0123456789abcdef) but different provenance or rights, and one asset record "
+               "cannot carry both: select only one of them")  # fmt: skip
         return _error(
             "not_ready", 2, f"cannot apply visuals:\n  - {msg}", details={"errors": [msg]}
         )

@@ -20,8 +20,9 @@ import { ClearanceDialog, RevokeDialog, clearanceTarget, type ClearanceTarget } 
 import { GatesPanel, NOT_CERTIFIED } from "@/components/visuals/gates-panel";
 import { ImportDialog } from "@/components/visuals/import-dialog";
 import { RecoveryBanner, blockReason } from "@/components/visuals/recovery-banner";
-import { PlanEditor, ShotEditor, savedShots } from "@/components/visuals/scene-editor";
-import { ApiError, api, type ShotChoice, type VisualCandidate, type VisualsView as View } from "@/lib/api";
+import { PlanEditor, ShotEditor } from "@/components/visuals/scene-editor";
+import { useSceneDrafts, type SceneDrafts } from "@/hooks/use-scene-drafts";
+import { ApiError, api, type VisualCandidate, type VisualsView as View } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { applyStatePresentation, g3Presentation, humanize } from "@/lib/status";
 
@@ -50,6 +51,7 @@ export function VisualsView() {
   const [clearing, setClearing] = useState<ClearanceTarget | null>(null);
   const [revoking, setRevoking] = useState<VisualCandidate | null>(null);
   const [validated, setValidated] = useState<string | null>(null);
+  const drafts = useSceneDrafts(view.data);
   const failed = useRef(new Set<string>());
   const v = view.data;
   const activeJob = jobId ?? v?.active_job_id ?? null;
@@ -85,11 +87,17 @@ export function VisualsView() {
   const block = v ? blockReason(v) : null;
   const editBlock = block ?? (v && !v.editing.supported ? v.editing.reason : null);
   // "Validate visuals": the engine's evaluation, read again; apply is bound to its revision.
-  const validate = async () => {
+  // Only a successful, fresh read validates: a failed refetch keeps the old data in the cache,
+  // and that old snapshot never authorises apply.
+  const validate = async (): Promise<{ revision: string | null; error: string | null }> => {
+    setValidated(null);
     const r = await view.refetch();
-    const rev = r.data && !r.data.recovery_required ? r.data.revision : null;
-    setValidated(rev);
-    return rev;
+    if (!r.isSuccess || !r.data) {
+      return { revision: null, error: r.error instanceof Error ? r.error.message : "The engine's visuals state could not be read." };
+    }
+    if (r.data.recovery_required) return { revision: null, error: "An interrupted publication must be recovered first." };
+    setValidated(r.data.revision);
+    return { revision: r.data.revision, error: null };
   };
   const busy = Boolean(block) || plan.isPending;
 
@@ -168,10 +176,11 @@ export function VisualsView() {
                     onImageError={onImageError}
                     onClear={(c) => setClearing(clearanceTarget(c, v))}
                     onRevoke={(c) => setRevoking(c)}
+                    drafts={drafts}
                   />
                 ) : null}
                 {tab === "validate" ? (
-                  <ApplyPanel view={v} projectId={projectId} block={editBlock} onValidate={validate} validated={validated} />
+                  <ApplyPanel view={v} projectId={projectId} block={editBlock} onValidate={validate} validated={validated} unsaved={drafts.unsaved} />
                 ) : null}
                 {tab === "applied" ? <AssetFacts view={v} projectId={projectId} onImageError={onImageError} /> : null}
                 {tab === "report" ? <ReportTab view={v} /> : null}
@@ -295,6 +304,7 @@ function ScenesTab({
   onImageError,
   onClear,
   onRevoke,
+  drafts,
 }: {
   view: View;
   projectId: string;
@@ -305,6 +315,7 @@ function ScenesTab({
   onImageError: (url: string) => void;
   onClear: (c: VisualCandidate) => void;
   onRevoke: (c: VisualCandidate) => void;
+  drafts: SceneDrafts;
 }) {
   return (
     <ul className="space-y-4">
@@ -321,6 +332,7 @@ function ScenesTab({
           onImageError={onImageError}
           onClear={onClear}
           onRevoke={onRevoke}
+          drafts={drafts}
         />
       ))}
     </ul>
@@ -338,6 +350,7 @@ function SceneCard({
   onImageError,
   onClear,
   onRevoke,
+  drafts,
 }: {
   view: View;
   sceneId: string;
@@ -349,20 +362,21 @@ function SceneCard({
   onImageError: (url: string) => void;
   onClear: (c: VisualCandidate) => void;
   onRevoke: (c: VisualCandidate) => void;
+  drafts: SceneDrafts;
 }) {
   const s = view.scenes.find((x) => x.scene_id === sceneId)!;
   const p = view.plan!.scenes.find((x) => x.scene_id === sceneId);
   const r = view.report.scenes.find((x) => x.scene_id === sceneId);
-  const saved = savedShots(view, sceneId);
-  // The unsaved shot list. It follows the engine's saved selection whenever that changes
-  // (a save, the CLI, a job), and keeps the reviewer's edits otherwise.
-  const key = JSON.stringify(saved);
-  const [draft, setDraft] = useState<{ base: string; shots: ShotChoice[] }>({ base: key, shots: saved });
-  if (draft.base !== key) setDraft({ base: key, shots: saved });
-  const shots = draft.base === key ? draft.shots : saved;
-  const setShots = (next: ShotChoice[]) => setDraft({ base: key, shots: next });
+  // The unsaved shot list lives in the page's draft store, so it survives tab switches and
+  // refreshes, and a changed saved selection is reported as a conflict, never overwritten.
+  const d = drafts.get(sceneId);
+  const saved = d.saved;
+  const shots = d.shots;
   const toggle = (c: VisualCandidate) =>
-    setShots(shots.some((x) => x.candidate_id === c.id) ? shots.filter((x) => x.candidate_id !== c.id) : [...shots, { candidate_id: c.id }]);
+    drafts.set(
+      sceneId,
+      shots.some((x) => x.candidate_id === c.id) ? shots.filter((x) => x.candidate_id !== c.id) : [...shots, { candidate_id: c.id }],
+    );
   return (
     <li id={`scene-${s.scene_id}`} className="space-y-3 rounded-[var(--radius-card)] border bg-surface p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -401,14 +415,21 @@ function SceneCard({
         </dl>
       ) : null}
       {p ? <PlanEditor key={JSON.stringify(p)} view={view} projectId={projectId} scene={p} block={editBlock} /> : null}
-      <ShotEditor view={view} projectId={projectId} sceneId={s.scene_id} draft={shots} setDraft={setShots} block={editBlock} />
+      <ShotEditor view={view} projectId={projectId} sceneId={s.scene_id} drafts={drafts} block={editBlock} />
       <CandidateGallery
         view={view}
         projectId={projectId}
         sceneId={s.scene_id}
         brief={text(p?.brief) ?? undefined}
         onImageError={onImageError}
-        editing={{ chosen: shots.map((x) => x.candidate_id), onToggle: toggle, onClear, onRevoke, block: editBlock }}
+        editing={{
+          chosen: shots.map((x) => x.candidate_id),
+          onToggle: toggle,
+          onClear,
+          onRevoke,
+          block: editBlock,
+          selectBlock: d.saving ? `Saving the selection for ${sceneId}…` : null,
+        }}
       />
       <Button size="sm" variant="outline" onClick={() => onImport(s.scene_id)} disabled={Boolean(block)}>
         <FileUp aria-hidden /> Import an image for {s.scene_id}…

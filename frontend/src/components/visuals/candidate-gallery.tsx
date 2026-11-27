@@ -154,6 +154,8 @@ export interface GalleryEditing {
   onRevoke: (c: VisualCandidate) => void;
   /** Why editing is unavailable (recovery, a job), or null. */
   block: string | null;
+  /** Why the shot toggles alone are unavailable (a save of this scene is running), or null. */
+  selectBlock?: string | null;
 }
 
 export function CandidateGallery({
@@ -249,8 +251,8 @@ function EditActions({ c, view, editing }: { c: VisualCandidate; view: VisualsVi
           variant={pos >= 0 ? "default" : "outline"}
           aria-pressed={pos >= 0}
           onClick={() => editing.onToggle(c)}
-          disabled={off}
-          title={editing.block ?? undefined}
+          disabled={off || Boolean(editing.selectBlock)}
+          title={editing.block ?? editing.selectBlock ?? undefined}
         >
           {pos >= 0 ? <Check aria-hidden /> : <Plus aria-hidden />}
           {pos >= 0 ? `Shot ${pos + 1} (remove)` : "Use as a shot"}
