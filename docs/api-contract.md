@@ -301,7 +301,7 @@ Implemented in UI-A against engine `65c5f52` (V1, D-122). Selection, clearances,
 
 | Method and path | Engine command | Body | Response and errors |
 |---|---|---|---|
-| `GET /projects/{id}/visuals` | `visuals-state --json` (one run per request) | none | the engine snapshot as it prints it (`scheme`, `revision`, `inputs`, `evidence_inputs`, `pending_journals`, `recovery_required`, `catalog_trusted`, `catalog_problems`, `plan`, `candidates`, `selection`, `applied`, `integrity`, `scenes` with `apply_state`, `assets`, `report`, `gates {g1, g3}`), plus `narration {scene_id: text}` (only from the storyboard bytes the snapshot names), `network {enabled, search_provider}`, `editing {supported: false, reason}` and `active_job_id`. `503 state_unavailable` if the engine cannot produce it; `502 engine_unsupported` for an engine before D-122 |
+| `GET /projects/{id}/visuals` | `visuals-state --json` (one run per request) | none | the engine snapshot as it prints it (`scheme`, `revision`, `inputs`, `evidence_inputs`, `pending_journals`, `recovery_required`, `catalog_trusted`, `catalog_problems`, `plan`, `candidates`, `selection`, `applied`, `integrity`, `scenes` with `apply_state`, `assets`, `report`, `gates {g1, g3}`), plus `narration {scene_id: text}` (only from the storyboard bytes the snapshot names), `network {enabled, search_provider}`, `editing` (UI-B: `{supported: true, reason: null, acknowledgement, bases, motions, fits, max_shots}`, the engine's exact clearance acknowledgement and enums) and `active_job_id`. The snapshot also carries `clearance_history` and `clearance_history_problems` (engine D-123). `503 state_unavailable` if the engine cannot produce it; `502 engine_unsupported` for an engine before D-122 |
 | `GET /projects/{id}/visuals/candidates/{candidate_id}/image?sha256=H` | read, verified | none | the image bytes. `400 invalid_input` (no or malformed `sha256`, malformed ID); `404 not_found`; `409 catalog_untrusted`; `409 image_changed` with `details.current_sha256`; `409 image_integrity`; `503 state_unavailable` |
 | `GET /projects/{id}/visuals/assets/{asset_id}/image?sha256=H` | read, verified | none | as above, for an asset whose record is the one `visuals-apply` wrote (`record_intact`), otherwise `409 image_integrity` |
 | `POST /projects/{id}/visuals/plan` | `visuals-plan --expect-revision=R --json` (never `--replace-plan`) | `expected_revision` | `202` job `visuals-plan` |
@@ -326,6 +326,28 @@ Implemented in UI-A against engine `65c5f52` (V1, D-122). Selection, clearances,
 A failed job reports the engine's JSON error code when it printed one (`revision_mismatch`, `preview_mismatch`, `recovery_required`, `partial_acquire_failure` exit 13, `g1_not_current`, `catalog_untrusted`) as its `error_code`, with a fixed message, instead of the exit code's summary. This applies to research jobs too. `YTA_VISUALS_NETWORK=false` refuses the preview and the search with `403 network_disabled` and runs no engine command; imports still work.
 
 **Image responses.** `Content-Type` from the verified magic (`image/png` or `image/jpeg`), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Content-Disposition: inline`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "H"`. Errors are `Cache-Control: no-store`. The bytes sent are the bytes hashed.
+
+## Milestone 4, UI-B: selection, clearances, plan narrowing and apply (implemented)
+
+Implemented in UI-B against engine `26c608f` (V2a D-123, V2b D-124). Both writes hold the project (`409 job_conflict`), need CSRF and origin, and are refused first by the backend for a pending publication (`409 recovery_required`, `checked_by: backend`) or another revision (`409 revision_conflict`) before any engine command runs.
+
+| Method and path | Engine command | Body | Response |
+|---|---|---|---|
+| `POST /projects/{id}/visuals/edit` | `visuals-edit --expect-revision=R --json [--dry-run]`, the patch `{"operations": [...]}` on stdin | `expected_revision`, `operations` (1–200), `dry_run?` | `{result {status: published \| already_current \| would_publish, dry_run, previous_revision, revision, changed_files, history [{op_index, id, action, candidate_id}], check}, visuals}`; no `visuals` for a dry run |
+| `POST /projects/{id}/visuals/apply` | `visuals-apply --reviewer=… --expect-revision=R --json` (never `--replace-shots` or `--replace-assets`) | `expected_revision` (the validated one), `reviewer`, `confirm: true` | `{result {status: published \| already_current \| images_restored, scenes_changed, assets_added, assets_unchanged, rights_unverified, images_restored, revision}, visuals}` |
+
+**Operations** (strict like the engine: unknown fields, wrong JSON types and explicit nulls are `422` before any engine run; text is NFC-normalised):
+- `shots.set {scene_id, shots: [{candidate_id, motion?, fit?, duration_seconds?}]}` (1–20 shots; motion `static | slow_zoom | slow_zoom_out | pan_left | pan_right`, fit `auto | cover | contain`, seconds 0–600) and `shots.clear {scene_id}`;
+- `clearance.set {candidate_id, expected_candidate_sha256, expected_rights_fingerprint, reviewer, basis, justification, evidence, acknowledgement}`. The engine refuses (`target_changed`) unless the two expected values are the catalogue's, re-hashes the bytes, binds a local evidence document's bytes, and records the clearance in the hash-chained history;
+- `clearance.revoke {candidate_id, reviewer, reason}`;
+- `plan.update {scene_id, search_query?, search_enabled?, generation_enabled?, notes?}`, narrowing only.
+
+**Engine refusals** (in addition to the UI-A list):
+- `invalid_patch` → `422 invalid_edit` with `details.errors [{loc, msg, code}]` (`unknown_candidate`, `target_changed`, `not_narrowing`, `reason_too_thin`, …); with a `history_tampered` item → `409 history_tampered`;
+- `image_integrity` → `409 image_integrity` (`candidate_ids`);
+- `not_ready` → `409 not_ready` with `details.errors` (the engine's items, e.g. one asset getting two different rights records);
+- `human_edit_conflict` → `409 human_edit_conflict` with `details.conflicts` (shots the engine did not write; never replaced);
+- `concurrency` → `409 engine_conflict` (the project changed during the command; reload and retry).
 
 ## Milestone 3 (proposed): research and G2
 
