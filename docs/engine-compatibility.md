@@ -60,7 +60,7 @@ Other engine codes exist (3–6, 8, 13, 15); preserve raw code and stderr in saf
 
 ## Verified findings (2026-11-20)
 
-**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1. The pin moved to `573ebdd` for Milestone 2, `fb6bffc` for Milestone 3, and is now `65c5f52` (see Milestone 4 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
+**Tested engine:** `levu48/youtube-agent` `main` @ `d1325c4` (`ytagent 0.1.0`). This revision was pinned in [`ENGINE_REF`](../ENGINE_REF) for M1. The pin moved to `573ebdd` for Milestone 2, `fb6bffc` for Milestone 3, `65c5f52` for M4 UI-A, and is now `c089089` (engine V2a; see Milestone 4 below). The pin is checked by `scripts/test-real-engine.sh` and CI. Python venv at `<engine>/.venv`, uv 0.13.6, macOS arm64. Ollama 11434 with `qwen3:8b` present.
 
 **Invocation.** The UI runs `uv run --no-sync ytagent …` with `cwd=YTA_ENGINE_REPO`. `--no-sync` guarantees the UI never re-syncs/modifies the engine's virtualenv. `PYTHONUNBUFFERED=1` is set so output streams line by line.
 
@@ -252,7 +252,7 @@ Checked against the CLI, the source (`agents/research.py`, `research/checks.py`,
 
 ## Milestone 4: visuals V1 (engine D-122), verified at `65c5f52` (2026-11-24)
 
-**Pinned engine:** `ENGINE_REF` is now `65c5f52b4428ead00fa01b104ebb69816036d033`, the merge of `youtube-agent` PR #16 (D-122, the visuals CLI contract, with its three review rounds). This is the minimum engine for the M4 UI-A work. V2 (`visuals-edit`, the clearance history and the decision-5 G3 change) is not started. The full contract is in [milestone-4.md](milestones/milestone-4.md) (V1); this section records what was checked against the merged engine.
+**Pinned engine (for UI-A):** `65c5f52b4428ead00fa01b104ebb69816036d033`, the merge of `youtube-agent` PR #16 (D-122, the visuals CLI contract, with its three review rounds). This is the minimum engine for the M4 UI-A work. The pin has since moved to `c089089` (V2a, next section). The full contract is in [milestone-4.md](milestones/milestone-4.md) (V1); this section records what was checked against the merged engine.
 
 **Required real-engine script.** `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` against a fresh clone at `65c5f52`: integration 8 tests, 0 skipped, 0 failed; E2E 17 passed, 1 allowed skip. Nothing in the UI uses the visuals commands yet, so this shows that M1–M3 still work at the new pin.
 
@@ -285,6 +285,61 @@ Checked by the real-engine integration test `test_visuals_workspace_with_real_en
   - A valid import is a `manual_review` candidate `<scene>-imp-<10 hex>`, stored re-encoded, and served like any candidate.
 - **Recovery.** A `pending` entry in `render/llm/manifest.json` makes `visuals-state` report `recovery_required: true` and a `recovery_required` finding (stage `draft`), and the backend refuses the preview with `checked_by: backend` before running the engine.
 - **CLI interoperability.** After the UI's plan, search and import, `ytagent visuals-state --json` from the CLI reports the same revision as the UI.
+
+## Milestone 4: visuals V2a (engine D-123), verified at `c089089` (2026-11-27)
+
+**Pinned engine:** `ENGINE_REF` is now `c08908916e97b1d0392d55ad4972b758eb00912f`, the merge of `youtube-agent` PR #17 (D-123: `visuals-edit`, the clearance history and the changed-evidence policy, with one review-correction round). This is the minimum engine for M4 UI-B. **V2b** (owner decision 5: G3 requires applied, intact, currently cleared images, and the matching release check) is not started, so G3 keeps its `fb6bffc` meaning at this pin.
+
+**Required real-engine script.** `ENGINE_SOURCE=https://github.com/levu48/youtube-agent.git scripts/test-real-engine.sh` against a fresh clone at `c089089`: integration 9 tests, 0 skipped, 0 failed; E2E 18 passed, 1 allowed skip (the slow-job cancel test). The UI does not call `visuals-edit` yet, so this shows that M1–M3 and UI-A still work at the new pin.
+
+**Engine verification.** The full offline engine suite was 1603 passed, 14 deselected (the live and paid tests). That includes `tests/test_visuals_edit.py` with 69 tests and `tests/test_visuals_cli_contract.py` with 133. GitHub CI did not run on the engine PR because of the account billing block, so this rests on local runs.
+
+**Offline CLI probe** (fresh clone at `c089089`, `ytagent 0.1.0`; a fixture-drafted English project, approved, planned and searched with the fixture provider; no network):
+
+*The command.* `visuals-edit --project-root=P --expect-revision=R [--dry-run] --json` reads `{"operations": [...]}` from stdin. `--expect-revision` is required. A success prints `{ok, status, dry_run, previous_revision, revision, changed_files, history, check}`:
+- `status` is `published`, `already_current` or `would_publish` (dry run);
+- `history` lists `[{op_index, id, action, candidate_id}]` for each history entry the patch adds;
+- `check` is the evaluation of the edited state, `visuals-check`'s verdict.
+
+*Shots, dry run and revision.*
+- **Dry run.** `shots.set` with `--dry-run` gives `would_publish`, `changed_files: ["visual-selection.json"]`. Every path, byte and mtime of the project is unchanged afterwards.
+- **Revision prediction.** The real edit (`published`) returns the revision the dry run predicted, and `visuals-state` then reports it.
+- **Stale and repeated edits.** Repeating with the old revision is `revision_mismatch`, exit 9, with `current_revision`. Repeating with the new one is `already_current`, `changed_files: []`.
+
+*Refusals.* Each of these is `invalid_patch`, exit 2, with `details[{loc, msg, code}]`:
+
+| Patch | Detail code |
+|---|---|
+| An unknown candidate | `unknown_candidate` |
+| An unknown `op` | Pydantic's tagged-union message |
+| `plan.update` switching search on for a chart scene | `not_narrowing` |
+| A `clearance.set` whose `expected_rights_fingerprint` is not the catalogue's | `target_changed` |
+| A justification or reason that is too short | `reason_too_thin` (the revoke case was observed) |
+| A changed clearance-history file | top-level message "`render/visuals/clearance-history.json` is not intact … every edit is refused" |
+
+A narrowing `plan.update` (search off) is `published` with `changed_files: ["visual-plan.json"]`. The `clearance.set` justification needs about six real words. Its acknowledgement must be exactly `CLEARANCE_ACKNOWLEDGEMENT`. Its `basis` is one of `license_confirmed_at_source`, `public_domain_confirmed`, `permission_obtained`, `own_work` and `provider_terms_reviewed`; the last is for generated images only.
+
+*Clearances and history.*
+- **What a clearance writes.** A `clearance.set` changes `render/visuals/clearance-history.json`, `render/visuals/manifest.json` and `visual-selection.json`. `history` gives `action: set`, and a second set for the same candidate gives `replaced`.
+- **History in `visuals-state`.** `clearance_history` is `{schema_version, entries}`. Each entry is `{id: ch-NNNNN, seq, prev_sha256, action, candidate_id, at, by_reviewer, reason, clearance, ...}`; the first `prev_sha256` is `null`. It is `null` before any clearance.
+- **Tampering.** Editing an entry by hand is reported in `clearance_history_problems` ("modified outside the tool").
+- **Evidence.** The cited local evidence file appears in `evidence_inputs` with its SHA-256, or `null` once it is removed.
+
+*Rights of an applied asset*, for an import with complete licence metadata, cleared with `permission_obtained` and a local evidence file, selected and applied:
+
+| State | `rights_current`, `rights_reason` |
+|---|---|
+| applied | `true`, `null` |
+| evidence file edited | `false`, `evidence_changed` |
+| evidence file removed | `false`, `clearance_invalid` |
+| original bytes put back | `true`, `null` |
+| `clearance.revoke` | `false`, `clearance_revoked` (asset files untouched; G3 also reports `image_rights_not_cleared` while the candidate is selected) |
+| a new `clearance.set`, **no apply** | `true`, `null` |
+
+**Notes for UI-B:**
+- **Incomplete metadata.** An import cleared *without* creator, licence and source URL stays `rights_verified: false` in `assets.json` after apply, and a later clearance does not change that. The engine requires complete evidence fields for a human attestation (`_rights_decision`, `evidence_complete`). The clearance dialog should show the candidate's missing evidence fields before the reviewer clears it.
+- **Unrelated edits still succeed.** A `visuals-edit` on another scene succeeds while an evidence file differs from its recorded hash. The changed evidence is reported in the asset facts; it does not block that edit.
+- **Concurrency.** A `concurrency` refusal (exit 9) can come from an input or evidence file changing during the edit. Treat it as "reload and retry", like `revision_mismatch`.
 
 ## Milestone 2, editing: `draft-edit` (2026-11-22, engine `573ebdd`)
 
