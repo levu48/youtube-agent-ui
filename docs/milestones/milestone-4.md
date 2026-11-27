@@ -2,8 +2,10 @@
 
 **Status:** specification; owner decisions approved 2026-11-23. The engine needs two prerequisite PRs (V1, V2) before the UI can drive this stage.
 - **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
-- **UI-A is implemented** on branch `feat/m4-ui-a` (draft PR): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
-- **V2 is not started.**
+- **UI-A is merged** (UI PR #16): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
+- **V2 is split in two engine PRs.**
+  - **V2a is merged:** engine PR #17 (D-123), merge commit `c089089`, now the pinned `ENGINE_REF`. It covers `visuals-edit`, the clearance history, and the decision that changed evidence invalidates a clearance. Verified with an offline CLI probe in [engine-compatibility.md](../engine-compatibility.md).
+  - **V2b is not started.** It is the decision-5 G3 and release change.
 - The baseline sections ("Existing baseline", "Selection, apply, rights and G3 at `fb6bffc`") describe the engine before V1. They were verified read-only at `fb6bffc`, and V1 changes none of their gate or rights policy.
 
 **Goal:** a reviewer can choose one or more images for every scene of an approved draft in the browser, see each image's licence evidence, record rights clearances where a licence cannot be verified automatically, and apply the selection to the draft, with the `youtube-agent` engine as the only authority. This covers:
@@ -39,7 +41,7 @@
 - Placeholder, mock and fixture images are never publishable.
 - Chart scenes are import only. Archival and document scenes are never generated.
 
-**UI.** M1–M3 are merged (UI `main`; their engine was `fb6bffc`, and `ENGINE_REF` is now `65c5f52`, the V1 merge). M4 reuses:
+**UI.** M1–M3 are merged (UI `main`; their engine was `fb6bffc`, `ENGINE_REF` was `65c5f52`, the V1 merge, for UI-A, and is now `c089089`, the V2a merge). M4 reuses:
 - the job runner, SSE and cancellation;
 - `_engine_write` (project held, refusals mapped);
 - the preview-and-confirm-hosts pattern from research collection;
@@ -155,6 +157,8 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
 - **Progress.** One line per scene searched, downloaded or rejected, on a progress logger.
 
 ### V2 — `visuals-edit`: selection, clearances and plan narrowing
+V2a merged as engine PR #17 (D-123, `c089089`): the command, the operations, validation, the clearance history, revocation, and changed evidence invalidating a clearance. V2b is not started: the G3 gate change below and the release check.
+
 - **The command.** `visuals-edit --expect-revision=R --json [--dry-run]`, with a strict patch `{"operations": [...]}` on stdin: no nulls, no unknown fields, at most 1 MiB and 200 operations. All operations are applied and published atomically under the lock, or none are.
 - **Operations:**
   - `shots.set {scene_id, shots: [{candidate_id, motion?, fit?, duration_seconds?}]}` and `shots.clear {scene_id}`;
@@ -177,7 +181,7 @@ Two engine PRs in `youtube-agent`, each with a decision entry, README update and
   - new finding codes `visuals_not_applied` (with the scene IDs) and `applied_image_problem` (with the asset ID and the reason); `image_rights_not_cleared` is also used for an applied asset whose clearance was revoked;
   - `release_storyboard`'s `asset_problem` uses the same `rights_current` check, so a revoked image cannot reach release even with the selection cleared.
 
-  Until V2 is merged and pinned, G3 keeps its `fb6bffc` meaning, and the UI shows the `apply_state` and per-asset facts beside it as separate engine facts.
+  Until V2b is merged and pinned, G3 keeps its `fb6bffc` meaning (true at `c089089`), and the UI shows the `apply_state` and per-asset facts beside it as separate engine facts.
 
 ### Integrity: how changed, missing or substituted images are detected
 Image bytes are **not** in the revision, because hashing every candidate on every page load would cost a full read of each one. Instead, integrity is enforced by mandatory checks wherever bytes matter, all against the engine's recorded hashes:
@@ -199,7 +203,7 @@ Image bytes are **not** in the revision, because hashing every candidate on ever
 **Evidence documents.** A clearance's `evidence` can name a local document in the project (for example a permission letter). Clearance validation hashes it, using the same containment rules as everywhere else (lexically safe, inside the project, a regular file; a remote URL is never fetched).
 - **One reading per snapshot.** Each distinct evidence reference is read once per snapshot and cached for that snapshot only, including a `null` result. All clearances citing the same document see the same reading.
 - **Changes during a read.** The snapshot compares every reading again at the end, and retries (then `concurrency`) if one changed. A snapshot never mixes two states of one document. The readings are reported as `evidence_inputs`.
-- **V1 limitation (deferred to V2).** The engine does not compare the document with the hash recorded at apply (`RecordedClearance.evidence_sha256`). Replacing a permission document with different contents therefore leaves the clearance valid and `rights_current: true`. Whether changed evidence invalidates an attestation, needs a new clearance or a re-apply, how evidence hashes enter the clearance history, and what it means for G3 and release, are V2 policy decisions. The UI must not present `rights_current` as proof that an evidence document is unchanged since apply.
+- **V1 limitation (deferred to V2).** The engine does not compare the document with the hash recorded at apply (`RecordedClearance.evidence_sha256`). Replacing a permission document with different contents therefore leaves the clearance valid and `rights_current: true`. Whether changed evidence invalidates an attestation, needs a new clearance or a re-apply, how evidence hashes enter the clearance history, and what it means for G3 and release, are V2 policy decisions. The UI must not present `rights_current` as proof that an evidence document is unchanged since apply. *Resolved by D-123, in V2a at `c089089`.* A clearance recorded with `visuals-edit` binds the evidence file's bytes. A changed file gives `rights_current: false, rights_reason: evidence_changed`; a removed one gives `clearance_invalid`. A new `clearance.set` restores the clearance without an apply. A clearance written by hand has no recorded hash and is checked as before.
 
 ### Network confirmation: the acquisition preview
 - **Preview.** `visuals-acquire --dry-run --json` contacts nothing and is read-only: it evaluates one snapshot through the same read-only path as `visuals-state` (no directory, lock, recovery or manifest save; retried if the inputs change). It honours `--expect-revision` (`revision_mismatch`, nothing written). It runs the same checks and preview function as a real run does under the lock, so the same state and parameters give the same `preview_sha256`. While a draft/visuals or research publication is pending it refuses with `recovery_required` (`details.journals`), because a run would first recover and then act on other files. It returns the canonical preview `P` and `preview_sha256 = sha256(canonical_json(P))`, serialised as the revision is. `P` contains:
@@ -492,8 +496,8 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 |---|---|---|---|---|
 | UI-0 | UI | none | this specification and the roadmap | review |
 | V1 (**merged**, PR #16, `65c5f52`) | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot, journal manifests included: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions, `pending_journals` and `recovery_required`); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical, read-only acquisition preview (refusing `recovery_required`) with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
-| V2 | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
-| UI-A (**implemented**, branch `feat/m4-ui-a`) | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
+| V2 (V2a **merged**, PR #17, `c089089`; V2b, the G3 and release change, not started) | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
+| UI-A (**merged**, UI PR #16) | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
 | UI-B | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
 
 ## Non-goals
@@ -508,7 +512,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 - Recovering an interrupted publication from the browser: the view shows the engine's `next_action`, and the CLI user recovers it (a later milestone may add an explicit recovery action).
 
 ## Definition of done
-- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved). (V1: merged as `65c5f52`, recorded and pinned. V2: not started.)
+- [ ] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved). (V1: merged as `65c5f52`, recorded. V2a: merged as `c089089`, recorded and pinned. V2b: not started.)
 - [ ] The browser performs every visuals action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
 - [ ] Network requests go only to hosts the reviewer confirmed for that exact acquisition. The confirmation is bound to the engine's canonical preview (`preview_sha256`), checked by the backend and by the engine (`preview_mismatch` at both), and invalidated by any parameter or revision change. With `YTA_VISUALS_NETWORK=false` there are none. No paid call is possible from the UI.
 - [ ] Image integrity holds end to end:
