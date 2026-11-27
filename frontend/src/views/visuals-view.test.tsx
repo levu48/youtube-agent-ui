@@ -269,9 +269,15 @@ describe("visuals workspace", () => {
     expect(calls.filter((c) => c.path === "/projects/p1/visuals").length).toBe(before + 1);
   });
 
-  it("notes that G3 does not require the selection to be applied", async () => {
-    setup({}, view({ gates: { g1: { status: "approved", findings: [] }, g3: { status: "ready", findings: [] } } }));
-    expect(await screen.findByText("G3 does not require the selection to be applied; apply it before rendering.")).toBeInTheDocument();
+  it("shows the engine's G3 findings as reported, with no note of its own (D-124)", async () => {
+    setup({}, view({ gates: { g1: { status: "approved", findings: [] }, g3: { status: "needs_review", findings: [
+      { severity: "blocker", stage: "visuals", code: "visuals_not_applied", artifact: "storyboard.draft.json",
+        detail: "G3: 1 scene(s) do not show their selection in the draft: scene-002 (selected_not_applied)",
+        next_action: "ytagent visuals-apply, then draft-approve" },
+    ] } } }));
+    expect(await screen.findByText("visuals_not_applied")).toBeInTheDocument();
+    expect(screen.getByText(/scene-002 \(selected_not_applied\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/does not require the selection to be applied/)).not.toBeInTheDocument();
   });
 
   it("shows each applied image's facts, including an ambiguous binding", async () => {
