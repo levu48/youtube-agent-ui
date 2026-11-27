@@ -1,23 +1,41 @@
 "use client";
 
-import { ExternalLink, Maximize2 } from "lucide-react";
+import { Check, ExternalLink, Maximize2, Plus, ShieldCheck, ShieldOff } from "lucide-react";
 import { useState } from "react";
 
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { candidateImageUrl, type VisualCandidate, type VisualsView } from "@/lib/api";
-import { IMAGE_INTEGRITY, humanize, rightsPresentation } from "@/lib/status";
+import { candidateImageUrl, type RightsClearance, type VisualCandidate, type VisualsView } from "@/lib/api";
+import { CLEARANCE_BASIS, IMAGE_INTEGRITY, humanize, rightsPresentation } from "@/lib/status";
 
-interface Clearance {
-  candidate_id?: string;
-  reviewer?: string;
-  evidence?: string;
+export function clearanceFor(view: VisualsView, id: string): RightsClearance | null {
+  return view.selection?.rights_clearances?.find((c) => c.candidate_id === id) ?? null;
 }
 
-function clearanceFor(view: VisualsView, id: string): Clearance | null {
-  const list = (view.selection as { rights_clearances?: Clearance[] } | null)?.rights_clearances ?? [];
-  return list.find((c) => c.candidate_id === id) ?? null;
+/** A candidate a human may clear: the engine's `manual_review`, never test or mock images. */
+export function clearable(c: VisualCandidate): boolean {
+  return c.rights?.status === "manual_review" && !c.placeholder && Boolean(c.sha256);
+}
+
+function History({ view, id }: { view: VisualsView; id: string }) {
+  const entries = (view.clearance_history?.entries ?? []).filter((e) => e.candidate_id === id);
+  if (!entries.length) return null;
+  return (
+    <>
+      <dt className="text-muted-foreground">History</dt>
+      <dd className="min-w-0">
+        <ol className="space-y-0.5">
+          {entries.map((e) => (
+            <li key={e.id} className="break-words">
+              {humanize(e.action)} by {e.by_reviewer} on {e.at.slice(0, 10)}
+              {e.reason ? `: ${e.reason}` : ""}
+            </li>
+          ))}
+        </ol>
+      </dd>
+    </>
+  );
 }
 
 /** Labels that must never be missed: test data is never publishable, generated images are
@@ -112,15 +130,30 @@ function Details({ c, view }: { c: VisualCandidate; view: VisualsView }) {
         <>
           <dt className="text-muted-foreground">Clearance</dt>
           <dd className="min-w-0 break-words">
-            Recorded{cleared.reviewer ? ` by ${cleared.reviewer}` : ""} (in the CLI).
+            Recorded{cleared.reviewer ? ` by ${cleared.reviewer}` : ""}
+            {cleared.basis ? ` (${CLEARANCE_BASIS[cleared.basis] ?? humanize(cleared.basis)})` : ""}.
+            {cleared.justification ? ` ${cleared.justification}` : ""}
             {local
-              ? ` Evidence ${evidence}: ${view.evidence_inputs[evidence!] ? "found" : "missing or refused"}. The engine does not yet check whether this document changed since the clearance.`
-              : ""}
+              ? ` Evidence ${evidence}: ${view.evidence_inputs[evidence!] ? "found" : "missing or refused"}.${cleared.evidence_sha256 ? " Its bytes are bound: if the document changes, the clearance no longer counts." : " Written by hand: the engine checks only that the document exists."}`
+              : evidence
+                ? ` Evidence: ${evidence} (a link, never fetched).`
+                : ""}
           </dd>
         </>
       ) : null}
+      <History view={view} id={c.id} />
     </dl>
   );
+}
+
+export interface GalleryEditing {
+  /** Candidate IDs in the scene's unsaved shot list, in order. */
+  chosen: string[];
+  onToggle: (c: VisualCandidate) => void;
+  onClear: (c: VisualCandidate) => void;
+  onRevoke: (c: VisualCandidate) => void;
+  /** Why editing is unavailable (recovery, a job), or null. */
+  block: string | null;
 }
 
 export function CandidateGallery({
@@ -129,12 +162,14 @@ export function CandidateGallery({
   sceneId,
   brief,
   onImageError,
+  editing,
 }: {
   view: VisualsView;
   projectId: string;
   sceneId: string;
   brief?: string;
   onImageError: (url: string) => void;
+  editing?: GalleryEditing;
 }) {
   const [open, setOpen] = useState<VisualCandidate | null>(null);
   const cands = view.candidates[sceneId] ?? [];
@@ -161,15 +196,23 @@ export function CandidateGallery({
               <StatusBadge presentation={rightsPresentation(c.rights?.status)} prefix="Rights evidence" className="self-start" />
               <Labels c={c} />
               <Details c={c} view={view} />
-              {url ? (
-                <Button size="sm" variant="outline" className="mt-auto self-start" onClick={() => setOpen(c)}>
-                  <Maximize2 aria-hidden /> View larger<span className="sr-only">: {c.title ?? c.id}</span>
-                </Button>
-              ) : null}
+              <div className="mt-auto flex flex-wrap gap-1">
+                {url ? (
+                  <Button size="sm" variant="outline" onClick={() => setOpen(c)}>
+                    <Maximize2 aria-hidden /> View larger<span className="sr-only">: {c.title ?? c.id}</span>
+                  </Button>
+                ) : null}
+                {editing ? <EditActions c={c} view={view} editing={editing} /> : null}
+              </div>
             </li>
           );
         })}
       </ul>
+      {editing && editing.chosen.length ? (
+        <p className="text-xs text-muted-foreground">
+          {editing.chosen.length} shot(s) chosen for {sceneId}; save them in the shot list above.
+        </p>
+      ) : null}
       <Dialog open={open !== null} onOpenChange={(o) => (o ? null : setOpen(null))}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
@@ -189,6 +232,44 @@ export function CandidateGallery({
           ) : null}
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
+
+function EditActions({ c, view, editing }: { c: VisualCandidate; view: VisualsView; editing: GalleryEditing }) {
+  const pos = editing.chosen.indexOf(c.id);
+  const usable = c.selectable && c.status === "available" && Boolean(c.sha256) && view.catalog_trusted;
+  const cleared = clearanceFor(view, c.id);
+  const off = Boolean(editing.block);
+  return (
+    <>
+      {usable ? (
+        <Button
+          size="sm"
+          variant={pos >= 0 ? "default" : "outline"}
+          aria-pressed={pos >= 0}
+          onClick={() => editing.onToggle(c)}
+          disabled={off}
+          title={editing.block ?? undefined}
+        >
+          {pos >= 0 ? <Check aria-hidden /> : <Plus aria-hidden />}
+          {pos >= 0 ? `Shot ${pos + 1} (remove)` : "Use as a shot"}
+          <span className="sr-only">: {c.title ?? c.id}</span>
+        </Button>
+      ) : null}
+      {clearable(c) && view.catalog_trusted ? (
+        <>
+          <Button size="sm" variant="outline" onClick={() => editing.onClear(c)} disabled={off}>
+            <ShieldCheck aria-hidden /> {cleared ? "Record a new clearance…" : "Clear rights…"}
+            <span className="sr-only">: {c.title ?? c.id}</span>
+          </Button>
+          {cleared ? (
+            <Button size="sm" variant="outline" onClick={() => editing.onRevoke(c)} disabled={off}>
+              <ShieldOff aria-hidden /> Revoke clearance…<span className="sr-only">: {c.title ?? c.id}</span>
+            </Button>
+          ) : null}
+        </>
+      ) : null}
     </>
   );
 }
