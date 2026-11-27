@@ -127,7 +127,13 @@ export function ApplyPanel({
       <p className="text-sm">
         Render ready (engine evaluation): <strong>{r.render_ready ? "yes" : "no"}</strong>
       </p>
-      <div className="overflow-x-auto">
+      {/* Scrolls sideways on narrow screens: focusable, so it can be scrolled with the keyboard. */}
+      <div
+        role="region"
+        aria-label="Readiness per scene (scrolls sideways)"
+        tabIndex={0}
+        className="overflow-x-auto rounded focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:outline-none"
+      >
         <table className="w-full min-w-[36rem] text-left text-sm">
           <caption className="sr-only">Readiness per scene, as the engine reports it</caption>
           <thead>
