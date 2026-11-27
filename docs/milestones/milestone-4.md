@@ -3,7 +3,8 @@
 **Status:** specification; owner decisions approved 2026-11-23. The engine needs two prerequisite PRs (V1, V2) before the UI can drive this stage.
 - **V1 is merged:** engine PR #16 (decision D-122), merge commit `65c5f52`, now the pinned `ENGINE_REF`. The V1 section below matches the merged engine, including its three review rounds. The facts are recorded in [engine-compatibility.md](../engine-compatibility.md) with an offline CLI probe.
 - **UI-A is merged** (UI PR #16): the read-only workspace, image endpoints, plan job, preview-bound search, gallery and import, against `65c5f52`.
-- **UI-B is implemented** on branch `feat/m4-ui-b` (draft PR), against `26c608f`: selection, bound clearances with history and revocation, plan narrowing, validation and apply, and the real-engine G3 success test with public-domain images. The manual live Wikimedia smoke test is still to be recorded in [m4-verification.md](../m4-verification.md).
+- **UI-B is merged** (UI PR #19, `71e7565`, after one review-correction round), against `26c608f`: selection, bound clearances with history and revocation, plan narrowing, validation and apply, and the real-engine G3 success test with public-domain images. The manual live Wikimedia smoke test is still to be recorded in [m4-verification.md](../m4-verification.md).
+- **Definition of done:** 11 of 14 items met (checked 2026-11-27, below). Open: the live smoke test (network item), axe at tablet and mobile widths and 200% zoom (accessibility item), and independent review records for UI PRs #16–#18 (review item).
 - **V2 is split in two engine PRs.**
   - **V2a is merged:** engine PR #17 (D-123), merge commit `c089089`. It covers `visuals-edit`, the clearance history, and the decision that changed evidence invalidates a clearance.
   - **V2b is merged:** engine PR #18 (D-124), merge commit `26c608f`, now the pinned `ENGINE_REF`. It is the decision-5 G3 and release change.
@@ -500,7 +501,7 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 | V1 (**merged**, PR #16, `65c5f52`) | engine | UI-0 reviewed | `visuals-state` (one consistent read-only snapshot, journal manifests included: `revision`, `inputs`, per-candidate `integrity`, per-scene `apply_state`, per-asset `problem`/`rights_current` from the existing release functions, G1 and G3 from the existing gate functions, `pending_journals` and `recovery_required`); `--json` and the error envelope with the stable codes; `--expect-revision` everywhere (acquire re-checked after the network phase, import before publishing); the canonical, read-only acquisition preview (refusing `recovery_required`) with `--expect-preview` and `--allow-host`; `visuals-import --stdin`; apply restoring a missing applied image; progress | engine pytest, including the selection/apply/G3 cases above at `fb6bffc` semantics |
 | V2 (V2a **merged**, PR #17, `c089089`; V2b **merged**, PR #18, `26c608f`) | engine | V1 | `visuals-edit` (shots; clearances bound by the engine to the image bytes and rights fingerprint, with expected values; revocation; plan narrowing); byte verification under the lock; the hash-chained clearance history in the revision; a strict patch, atomic publication; the G3 and release gate change (decision 5) with its decision entry | engine pytest |
 | UI-A (**merged**, UI PR #16) | UI | V1 | the visuals view (from `visuals-state`), the two hash-addressed image endpoints with the snapshot freshness check, the plan job, the preview-bound acquire job, the gallery, the import upload, the `apply_state` and asset-fact display, the pending-recovery banner and `409 recovery_required` refusals, navigation | backend, frontend, E2E, real-engine script, CI |
-| UI-B (**implemented**, branch `feat/m4-ui-b`) | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
+| UI-B (**merged**, UI PR #19) | UI | V1, V2 | selection, clearances (bound dialog, history, revocation), plan narrowing, validation, apply with the G1 warning and re-approval link, G3 display; the required real-engine G3 success test with genuinely licensed images | same, plus the manual live Wikimedia smoke test |
 
 ## Non-goals
 - Paid image generation, API keys, OpenAI or any chargeable call: the UI never offers `--image-provider openai` or `--allow-paid`.
@@ -514,24 +515,48 @@ UI-0 (this spec) ─► V1 engine: visuals CLI contract ─► V2 engine: visual
 - Recovering an interrupted publication from the browser: the view shows the engine's `next_action`, and the CLI user recovers it (a later milestone may add an explicit recovery action).
 
 ## Definition of done
+Checked on 2026-11-27 against UI `main` @ `71e7565` and engine `26c608f`. Evidence is named per item. "Real-engine script" means `scripts/test-real-engine.sh` on a fresh clone at `ENGINE_REF` (integration 10/10, E2E 18 passed with the one allowed skip). The backend and frontend tests are in `backend/tests/unit/test_visuals_api.py`, `test_visuals_edit_api.py`, `frontend/src/views/visuals-view.test.tsx` and `visuals-edit.test.tsx`.
+
 - [x] V1 and V2 are merged in the engine and recorded in `engine-compatibility.md`. `ENGINE_REF` pins the minimum. The merged engine matches owner decisions 1–6 (approved). (V1: `65c5f52`. V2a: `c089089`. V2b: `26c608f`, pinned.)
-- [ ] The browser performs every visuals action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
+- [x] The browser performs every visuals action only by invoking supported engine commands. The UI and backend never write, move or delete engine-owned files directly; reading documented artifacts is the only direct file access.
+  - Evidence: every visuals route calls an allowlisted builder in `app/engine/commands.py`, and `assert_allowlisted` runs before every spawn (tested on every argv a fake-engine run produced).
+  - The backend's only file write is the job log in its own data directory (`app/jobs.py`, `Settings.logs_dir`).
+  - Engine files are read only through `open_nofollow` (snapshot freshness, scene narration, image bytes).
 - [ ] Network requests go only to hosts the reviewer confirmed for that exact acquisition. The confirmation is bound to the engine's canonical preview (`preview_sha256`), checked by the backend and by the engine (`preview_mismatch` at both), and invalidated by any parameter or revision change. With `YTA_VISUALS_NETWORK=false` there are none. No paid call is possible from the UI.
-- [ ] Image integrity holds end to end:
+  - Met in automated tests (UI-A): preview binding and `preview_mismatch` from both layers (fake `visuals_preview_drift`), `403 network_disabled` with no engine run, and `host_not_allowed` counted in a `partial_acquire_failure`.
+  - `--image-provider` is fixed to `none`, and `--allow-paid`, `--max-spend-usd` and `--max-generated` are forbidden flags.
+  - **Open:** the live Wikimedia smoke test ([m4-verification.md](../m4-verification.md)) has not been run, so confirmed hosts are not yet checked against the real network.
+- [x] Image integrity holds end to end:
   - selection, clearance, validation and apply verify candidate bytes against the engine's recorded hashes;
   - applied asset images are checked through the existing `applied.json` and content-address chain, and a missing or modified one is never shown as intact or eligible;
   - a changed, missing or replaced image is refused with `image_integrity`;
   - a clearance never applies to different bytes or changed rights evidence, and is recorded only for the bytes the reviewer was shown.
-- [ ] Images are served only by engine ID and expected hash, from a record in a snapshot verified current, on the exact bytes verified. An outdated URL gets `image_changed`, never old bytes. Unchanged images are cached as immutable.
-- [ ] Every mutation, including acquire after its network phase and import before publishing, is checked against the revision the reviewer loaded. Conflicts never overwrite.
-- [ ] While `recovery_required` is true, the workspace shows the pending journals and the engine's next action, offers no visuals action, and never presents a gate or fact as certified; the backend refuses every visuals write and the preview with `recovery_required`, and no read-only path recovers or writes.
-- [ ] Rights status and reasons are the engine's. Placeholder, mock and uncleared `manual_review` images are never shown as publishable. Clearances need the exact acknowledgement and are kept in a hash-chained history, part of the visuals revision. Revocation needs a reviewer and reason, and never deletes assets or changes the draft.
-- [ ] The workspace shows the engine's `apply_state` and per-asset facts for all seven conceptual states, with no frontend state machine.
-- [ ] Imports reach the engine only as bytes on stdin, size- and format-checked; no path crosses the boundary.
-- [ ] Apply warns about G1 and leads to re-approval. G3 is shown as the engine reports it, never approved, inferred, strengthened or weakened by the UI.
-- [ ] The required real-engine test reaches `G3 visuals: ready` offline with genuinely licensed images, every scene `applied_current`, and no visuals release blockers after export. M1–M3 flows still pass, and CI and the real-engine script pass.
+
+  Evidence:
+  - backend: `test_changed_candidate_bytes_refuse_the_selection`, `test_apply_refuses_changed_candidate_bytes`, `test_a_removed_applied_image_is_reported_and_restored_by_apply`, `test_a_clearance_is_bound_to_the_bytes_and_evidence_seen`;
+  - real engine: `test_g3_success_with_genuinely_licensed_images` (a changed image refuses its clearance);
+  - frontend: the clearance dialog locks on a changed image, and records nothing until the hash-addressed image has loaded (FIX-03);
+  - engine: D-123 (evidence binding) and D-124 (G3 and release).
+- [x] Images are served only by engine ID and expected hash, from a record in a snapshot verified current, on the exact bytes verified. An outdated URL gets `image_changed`, never old bytes. Unchanged images are cached as immutable. Evidence: the UI-A image-endpoint tests (`400`/`404`/`409`/`503`, path traversal, symlinks, disguised types, no-store errors), and the real-engine asset endpoint at its hash with an outdated hash giving `image_changed`.
+- [x] Every mutation, including acquire after its network phase and import before publishing, is checked against the revision the reviewer loaded. Conflicts never overwrite.
+  - Backend: pre-check and engine `--expect-revision` on plan, acquire (fake `visuals_race`), import, edit and apply (`test_a_stale_revision_is_refused_by_the_backend_first`, and a spent apply revision in the journey tests).
+  - UI: unsaved shot lists are kept through a conflict, and the reviewer chooses which to keep (FIX-02).
+- [x] While `recovery_required` is true, the workspace shows the pending journals and the engine's next action, offers no visuals action, and never presents a gate or fact as certified; the backend refuses every visuals write and the preview with `recovery_required`, and no read-only path recovers or writes.
+  - Backend: UI-A recovery tests, and `test_a_pending_publication_refuses_edits_and_apply_before_the_engine`.
+  - Frontend: the recovery-banner tests, and every UI-B edit control disabled.
+  - Engine: D-122 and D-124 (G3 and release read without recovering).
+- [x] Rights status and reasons are the engine's. Placeholder, mock and uncleared `manual_review` images are never shown as publishable. Clearances need the exact acknowledgement and are kept in a hash-chained history, part of the visuals revision. Revocation needs a reviewer and reason, and never deletes assets or changes the draft. Evidence: the acknowledgement is shown verbatim and checked by the engine (real-engine test), `test_a_tampered_history_refuses_every_edit`, `test_a_revocation_needs_a_reason_and_is_kept_in_the_history`, and `test_a_revoked_clearance_after_apply_blocks_g3_without_touching_assets`.
+- [x] The workspace shows the engine's `apply_state` and per-asset facts for all seven conceptual states, with no frontend state machine. Evidence: "names every apply state and rights reason in fixed words" (all six `apply_state` values), the validation tab (the engine's `render_ready`), and the asset facts (`rights_current`/`rights_reason`, `image`/`problem`).
+- [x] Imports reach the engine only as bytes on stdin, size- and format-checked; no path crosses the boundary. Evidence: the UI-A import tests (stdin bytes, field order, 20 MB limit, magic bytes).
+- [x] Apply warns about G1 and leads to re-approval. G3 is shown as the engine reports it, never approved, inferred, strengthened or weakened by the UI. Evidence: the apply dialog's G1 warning and the re-approval link (frontend and E2E), and the gates panel showing G3 findings as reported, with no G3 approve control. The UI-A "not applied" note was removed once D-124 was pinned.
+- [x] The required real-engine test reaches `G3 visuals: ready` offline with genuinely licensed images, every scene `applied_current`, and no visuals release blockers after export. M1–M3 flows still pass, and CI and the real-engine script pass. Evidence: `test_g3_success_with_genuinely_licensed_images` (images in `backend/tests/fixtures/visuals/SOURCE.md`), the real-engine script at `26c608f`, and CI on PR #19.
 - [ ] The gallery and forms meet WCAG 2.2 AA at all three widths, at 200% zoom and with reduced motion.
+  - Met in automated tests: axe (WCAG 2.2 AA tags, no serious or critical issues) on every visuals tab and dialog at 1440 px, on both engines; no horizontal overflow at 1440, 768 and 375 px and at 200% zoom; animations off with reduced motion.
+  - **Open:** axe does not yet run at 768 px, 375 px or 200% zoom, and no manual screen-reader pass has been recorded.
 - [ ] Each PR is reviewed, with no automatic merge.
+  - Met: nothing was merged automatically; every merge followed the owner's explicit request.
+  - Independent reviews: engine PRs #16 (three rounds), #17 and #18, and UI PR #19 (one correction round each for #17–#19).
+  - **Open:** UI PR #16 (UI-A) and the `ENGINE_REF` pin PRs #17 and #18 had CI but no recorded independent review. None of the reviews are recorded on GitHub (they were exchanged outside it).
 
 ## Claude Code handoff
 - **Read first:** `CLAUDE.md`, `docs/architecture.md`, `docs/engine-compatibility.md`, `docs/api-contract.md`, `docs/ui-design.md`, this file, and the engine's `docs/milestone-4-visuals.md` and decisions D-58…D-75.
