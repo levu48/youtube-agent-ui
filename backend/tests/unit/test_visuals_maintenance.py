@@ -94,13 +94,65 @@ def test_review_a_refused_upload_in_one_chunk_never_reaches_the_engine(client, p
     assert not (_root(settings) / "visuals-import-stdin.bin").exists()
 
 
-def test_review_the_size_cap_counts_held_bytes():
+def _feed(data: bytes, *, step: int | None = None, gate_after_headers: bool = True) -> VR._Upload:
+    """Parse an upload whose file part is ``data``, in one chunk or in ``step``-byte chunks,
+    opening the gate as the route does once the file part has started."""
+    body = _multipart("b", {"x": "1"}, data)
     up = VR._Upload(b"b")
-    up.parser.write(_multipart("b", {"x": "1"}, b"\x89PNG" + b"0" * 64))
-    assert not up.error
-    up.held.extend(b"0" * (V.MAX_IMAGE_BYTES + 1))  # as if one huge chunk arrived
-    up.open_gate()
+    chunks = [body] if step is None else [body[i : i + step] for i in range(0, len(body), step)]
+    for chunk in chunks:
+        up.parser.write(chunk)
+        if up.error:
+            break
+        if gate_after_headers and up.ready and not up.gate_open:
+            up.open_gate()
+    return up
+
+
+def _buffered(up: VR._Upload) -> int:
+    return len(up.file) + len(up.held)
+
+
+def test_review_an_image_exactly_at_the_limit_is_accepted():
+    up = _feed(b"\x89PNG" + b"0" * (V.MAX_IMAGE_BYTES - 4))
+    assert not up.error and len(up.file) == V.MAX_IMAGE_BYTES
+
+
+def test_review_one_byte_over_is_refused_and_never_buffered_past_the_cap():
+    up = _feed(b"\x89PNG" + b"0" * (V.MAX_IMAGE_BYTES - 3))
     assert up.error == "the image is larger than 20 MB"
+    assert _buffered(up) <= V.MAX_IMAGE_BYTES
+
+
+def test_review_a_single_oversized_chunk_is_refused_without_being_copied():
+    """Fields and a 21 MB file in one chunk, before the gate opens: the file bytes are
+    refused, not held."""
+    up = _feed(b"0" * (V.MAX_IMAGE_BYTES + 1024 * 1024), gate_after_headers=False)
+    assert up.error == "the image is larger than 20 MB"
+    assert _buffered(up) == 0
+
+
+def test_review_many_small_chunks_over_the_cap_are_refused_at_the_cap():
+    up = _feed(b"0" * (V.MAX_IMAGE_BYTES + 200_000), step=64 * 1024)
+    assert up.error == "the image is larger than 20 MB"
+    assert _buffered(up) <= V.MAX_IMAGE_BYTES
+
+
+def test_review_opening_the_gate_moves_the_held_bytes():
+    up = VR._Upload(b"b")
+    up.parser.write(_multipart("b", {"x": "1"}, b"\x89PNG" + b"0" * 1000))
+    held = up.held
+    up.open_gate()
+    assert up.file is held and len(up.file) == 1004 and len(up.held) == 0  # moved, not copied
+
+
+def test_review_an_oversized_upload_never_reaches_the_engine(client, planned, settings):
+    from tests.unit.test_visuals_api import _calls
+
+    data = b"\x89PNG\r\n\x1a\n" + b"\x00" * (V.MAX_IMAGE_BYTES + 10)
+    r = _upload(client, _rev(client), data)
+    assert r.status_code == 413 and r.json()["error"]["code"] == "too_large"
+    assert "visuals-import" not in _calls(settings)
 
 
 # --------------------------------------------------------------------------- 16-03

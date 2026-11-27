@@ -166,6 +166,9 @@ class Snapshots:
         return self._locks.setdefault(project_id, asyncio.Lock())
 
     def invalidate(self, project_id: str) -> None:
+        """Drop the kept snapshot. The project's lock is kept on purpose: removing an asyncio
+        lock another request may hold or wait on would break single-flight. One lock per
+        project ever seen (a small object); the snapshots themselves are dropped here."""
         self._entries.pop(project_id, None)
 
     def _current(self, entry: _Entry) -> bool:

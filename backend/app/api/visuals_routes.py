@@ -582,18 +582,19 @@ class _Upload:
         self._name = name
 
     def open_gate(self) -> None:
-        """The fields and revision passed: accept the held file bytes, and any that follow."""
+        """The fields and revision passed: accept the held file bytes (moved, not copied:
+        ``file`` is still empty here), and any that follow."""
         self.gate_open = True
-        self.file.extend(self.held)
-        self.held.clear()
-        if len(self.file) > V.MAX_IMAGE_BYTES:
-            self._fail("the image is larger than 20 MB")
+        self.file, self.held = self.held, bytearray()
 
     def _data(self, d: bytes, a: int, b: int) -> None:
         if self._name == FILE_FIELD:
-            (self.file if self.gate_open else self.held).extend(d[a:b])
-            if len(self.file) + len(self.held) > V.MAX_IMAGE_BYTES:
+            # The cap is checked before any byte is buffered: an oversized chunk, or one that
+            # would take the total past 20 MB, is refused without being copied.
+            if len(self.file) + len(self.held) + (b - a) > V.MAX_IMAGE_BYTES:
                 self._fail("the image is larger than 20 MB")
+                return
+            (self.file if self.gate_open else self.held).extend(d[a:b])
         elif self._name is not None:
             self._buf.extend(d[a:b])
             if len(self._buf) > MAX_FIELD_BYTES:
@@ -646,8 +647,6 @@ async def _read_upload(request: Request, on_ready) -> tuple[_Upload, VisualsImpo
             fields = _fields(up.fields)
             await on_ready(fields)
             up.open_gate()
-            if up.error:
-                raise ApiError(413, "too_large", up.error)
     if fields is None:
         raise ApiError(422, "validation_error", "No image file was sent (field 'file').")
     try:
