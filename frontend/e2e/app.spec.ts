@@ -39,6 +39,33 @@ async function animationsDone(el: Locator) {
   });
 }
 
+/** WCAG 2.2 AA on the visuals workspace at the current viewport: every tab, and the import and
+ * clearance forms (each opened and closed without saving). Uses the project the visuals journey
+ * left behind (planned, searched, one image imported, cleared and applied). */
+async function axeVisuals(page: Page) {
+  await page.goto("/projects/visuals-demo/visuals");
+  await expect(page.getByRole("heading", { level: 1, name: "Visuals" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Scenes and candidates" })).toBeVisible({ timeout: 30_000 });
+  for (const tab of ["Scenes and candidates", "Validate and apply", "Applied images", "Engine report"]) {
+    await page.getByRole("tab", { name: tab }).click();
+    await axe(page);
+  }
+  await page.getByRole("tab", { name: "Scenes and candidates" }).click();
+  await page.getByRole("button", { name: "Import an image for scene-001…" }).click();
+  const imp = page.getByRole("dialog", { name: "Import an image" });
+  await settled(imp);
+  await axe(page);
+  await page.keyboard.press("Escape");
+  await expect(imp).toBeHidden();
+  const imported = page.getByRole("list", { name: "Candidates for scene-001" }).getByRole("listitem").filter({ hasText: "Imported by you" });
+  await imported.getByRole("button", { name: /clearance…|Clear rights…/ }).first().click();
+  const clr = page.getByRole("dialog", { name: "Record a rights clearance" });
+  await settled(clr);
+  await axe(page);
+  await page.keyboard.press("Escape");
+  await expect(clr).toBeHidden();
+}
+
 async function settled(dialog: Locator) {
   // Scan a dialog only after its open animation, not a half-faded frame.
   await expect(dialog).toBeVisible();
@@ -890,6 +917,11 @@ for (const [name, width, height] of [
       await page.waitForLoadState("networkidle");
       await noHorizontalOverflow(page);
     }
+    // The visuals gallery and forms at this width (desktop is covered by the journey itself).
+    if (width < 1440) {
+      await axeVisuals(page);
+      await noHorizontalOverflow(page);
+    }
     if (width < 1024) {
       await page.getByRole("button", { name: "Open navigation" }).click();
       await expect(page.getByRole("dialog").getByRole("link", { name: "Projects" })).toBeVisible();
@@ -908,6 +940,8 @@ test("200% zoom and reduced motion keep core flows usable", async ({ page }) => 
     await page.waitForLoadState("networkidle");
     await noHorizontalOverflow(page);
   }
+  await axeVisuals(page); // 200% zoom with reduced motion
+  await noHorizontalOverflow(page);
   const duration = await page.evaluate(() => {
     const el = document.querySelector(".animate-spin, [class*='animate']");
     return el ? getComputedStyle(el).animationDuration : "0s";
