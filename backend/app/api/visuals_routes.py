@@ -94,10 +94,11 @@ async def _snapshot(s: AppState, row: ProjectRow, root, *, fresh: bool) -> dict:
         ) from None
 
 
-def _view(s: AppState, row: ProjectRow, root, snap: dict) -> dict:
+async def _view(s: AppState, row: ProjectRow, root, snap: dict) -> dict:
     active = s.jobs.active_for(row.id)
     out = {k: v for k, v in snap.items() if k != "ok"}
-    out["narration"] = V.scene_narrations(snap, root)
+    # Reading and hashing the storyboard is file I/O: off the event loop, like image reads.
+    out["narration"] = await asyncio.to_thread(V.scene_narrations, snap, root)
     out["network"] = {"enabled": s.settings.visuals_network, "search_provider": _provider(s)}
     out["editing"] = EDITING
     out["active_job_id"] = active.id if active else None
@@ -110,7 +111,7 @@ async def project_visuals(project_id: str, s: State) -> dict:
     included, from that one snapshot), plus the UI's own settings. Nothing is written."""
     row = s.projects.require(project_id)
     root = s.projects.confined_root(row)
-    return _view(s, row, root, await _snapshot(s, row, root, fresh=True))
+    return await _view(s, row, root, await _snapshot(s, row, root, fresh=True))
 
 
 async def _precheck(s: AppState, row: ProjectRow, root, expected_revision: str) -> dict:
@@ -163,6 +164,12 @@ _PATH_SAFE = re.compile(r"^(?:render/visuals|assets/images)/[A-Za-z0-9._-]{1,120
 _JOURNAL = re.compile(r"^render/(?:llm|research|production)/manifest\.json$")
 
 
+def _first_line(message: str) -> str:
+    """The engine message's first line, or "" for a missing, empty or blank message."""
+    lines = [line for line in message.splitlines() if line.strip()]
+    return lines[0].removeprefix("error:").strip()[:MAX_ENGINE_MESSAGE] if lines else ""
+
+
 def _ids(value: object, pattern: re.Pattern[str]) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -174,7 +181,7 @@ def _visuals_failure(res, what: str) -> ApiError:
     jerr = _engine_json_error(res)
     code = jerr.get("code")
     message = redact(str(jerr.get("message") or "")).strip()
-    first = message.splitlines()[0].removeprefix("error:").strip()[:MAX_ENGINE_MESSAGE]
+    first = _first_line(message)
     details = jerr.get("details") if isinstance(jerr.get("details"), dict) else {}
     if code == "revision_mismatch":
         current = jerr.get("current_revision") or details.get("current_revision")
@@ -516,13 +523,18 @@ _TITLE_SAFE = re.compile(r"[^A-Za-z0-9 ._()-]+")
 
 class _Upload:
     """A streaming multipart reader: text fields first, then one ``file`` part, kept in
-    memory only. ``ready`` turns true once the file part's headers are parsed, so the caller
-    validates the fields before reading the rest of the body."""
+    memory only. ``ready`` turns true once the file part's headers are parsed. Until the caller
+    has validated the fields and checked the revision (``open_gate``), file bytes are only
+    *held*: never appended to ``file``, never counted as the image, and at most the rest of the
+    network chunk that carried the file part's headers (the caller reads no further chunk
+    before the check). A refused upload discards them."""
 
     def __init__(self, boundary: bytes) -> None:
         self.fields: dict[str, str] = {}
         self.filename: str | None = None
         self.file = bytearray()
+        self.held = bytearray()  # file bytes that arrived before the gate opened
+        self.gate_open = False
         self.ready = False
         self.error: str | None = None
         self._headers: dict[str, str] = {}
@@ -569,11 +581,20 @@ class _Upload:
             return self._fail(f"{name} was sent twice")
         self._name = name
 
+    def open_gate(self) -> None:
+        """The fields and revision passed: accept the held file bytes (moved, not copied:
+        ``file`` is still empty here), and any that follow."""
+        self.gate_open = True
+        self.file, self.held = self.held, bytearray()
+
     def _data(self, d: bytes, a: int, b: int) -> None:
         if self._name == FILE_FIELD:
-            self.file.extend(d[a:b])
-            if len(self.file) > V.MAX_IMAGE_BYTES:
+            # The cap is checked before any byte is buffered: an oversized chunk, or one that
+            # would take the total past 20 MB, is refused without being copied.
+            if len(self.file) + len(self.held) + (b - a) > V.MAX_IMAGE_BYTES:
                 self._fail("the image is larger than 20 MB")
+                return
+            (self.file if self.gate_open else self.held).extend(d[a:b])
         elif self._name is not None:
             self._buf.extend(d[a:b])
             if len(self._buf) > MAX_FIELD_BYTES:
@@ -622,9 +643,10 @@ async def _read_upload(request: Request, on_ready) -> tuple[_Upload, VisualsImpo
             raise ApiError(status, "too_large" if status == 413 else "validation_error", up.error)
         if up.ready and fields is None:
             # The file part has started: everything else is known. Validate it and check the
-            # revision now, before reading the image itself.
+            # revision now, before any file byte is accepted and before the next chunk is read.
             fields = _fields(up.fields)
             await on_ready(fields)
+            up.open_gate()
     if fields is None:
         raise ApiError(422, "validation_error", "No image file was sent (field 'file').")
     try:
@@ -657,21 +679,27 @@ async def visuals_import(project_id: str, request: Request, s: State) -> dict:
     stdin; the engine checks the revision again under its lock and is authoritative."""
     row = s.projects.require(project_id)
     root = s.projects.confined_root(row)
+
+    # The upload is received without holding the project (a slow upload never blocks other
+    # actions), but the fields, recovery and revision are checked before any file byte is
+    # accepted. Bounded (20 MB) and in memory only.
+    async def on_ready(fields: VisualsImportFields) -> None:
+        await _precheck(s, row, root, fields.expected_revision)
+
+    up, fields = await _read_upload(request, on_ready)
+    data = bytes(up.file)
+    if not data:
+        raise ApiError(422, "validation_error", "The image file is empty.")
+    if V.sniff(data) is None:
+        raise ApiError(
+            422,
+            "invalid_input",
+            "The file is not a JPEG, PNG, WebP or TIFF image (checked by its first bytes).",
+        )
     with s.jobs.exclusive(row.id):
-
-        async def on_ready(fields: VisualsImportFields) -> None:
-            await _precheck(s, row, root, fields.expected_revision)
-
-        up, fields = await _read_upload(request, on_ready)
-        data = bytes(up.file)
-        if not data:
-            raise ApiError(422, "validation_error", "The image file is empty.")
-        if V.sniff(data) is None:
-            raise ApiError(
-                422,
-                "invalid_input",
-                "The file is not a JPEG, PNG, WebP or TIFF image (checked by its first bytes).",
-            )
+        # Held now: check recovery and the revision again, since the project may have changed
+        # while the upload was being received.
+        await _precheck(s, row, root, fields.expected_revision)
         try:
             res = await s.engine.visuals_import(
                 root,
@@ -710,7 +738,7 @@ async def visuals_import(project_id: str, request: Request, s: State) -> dict:
         "revision": out.get("revision") if engine_revision(out) else None,
     }
     snap = await _snapshot(s, row, root, fresh=True)
-    return {"result": result, "visuals": _view(s, row, root, snap)}
+    return {"result": result, "visuals": await _view(s, row, root, snap)}
 
 
 # ---------------------------------------------------------------------- edit and apply (UI-B)
@@ -784,7 +812,7 @@ async def visuals_edit(project_id: str, body: VisualsEditRequest, s: State) -> d
     }
     out: dict[str, Any] = {"result": result}
     if not body.dry_run:
-        out["visuals"] = _view(s, row, root, await _snapshot(s, row, root, fresh=True))
+        out["visuals"] = await _view(s, row, root, await _snapshot(s, row, root, fresh=True))
     return out
 
 
@@ -815,4 +843,4 @@ async def visuals_apply(project_id: str, body: VisualsApplyRequest, s: State) ->
         "revision": _rev(data.get("revision")),
     }
     snap = await _snapshot(s, row, root, fresh=True)
-    return {"result": result, "visuals": _view(s, row, root, snap)}
+    return {"result": result, "visuals": await _view(s, row, root, snap)}

@@ -1090,3 +1090,97 @@ def test_g3_success_with_genuinely_licensed_images(settings):
         r = c.post(f"{api}/visuals/edit",
                    json={"expected_revision": v["revision"], "operations": [ops[0]]})  # fmt: skip
         assert r.status_code == 409 and r.json()["error"]["code"] == "image_integrity", r.text
+
+
+def test_clearance_evidence_lifecycle_with_real_engine(settings):
+    """D-123 through the UI, offline: a clearance bound to a local permission document. The
+    applied image's rights are current; the document changed -> evidence_changed; removed ->
+    clearance_invalid; its original bytes back -> current again, with no new clearance or
+    apply. Each state is a fresh engine snapshot seen through the backend (the evidence file is
+    a snapshot freshness input)."""
+    from app.visuals_schemas import CLEARANCE_ACKNOWLEDGEMENT
+
+    settings.visuals_search_provider = "fixture"
+    api = "/api/v1/projects/hcm-demo"
+    root = settings.projects_root_real / "hcm-demo"
+    with Client(create_app(settings)) as c:
+        assert c.post("/api/v1/projects", json=PROJECT).status_code == 201
+        job_id = c.post(f"{api}/draft-jobs", json={"provider": "fixture"}).json()["job_id"]
+        wait_for(
+            lambda: c.get(f"/api/v1/jobs/{job_id}").json()["status"] == "succeeded", timeout=60
+        )
+        draft = c.get(f"{api}/draft").json()
+        r = c.post(f"{api}/draft/approve",
+                   json={"reviewer": "Nguyễn Văn A", "confirm": True,
+                         "review_token": draft["review_token"]})  # fmt: skip
+        assert r.status_code == 200, r.text
+
+        def view() -> dict:
+            r = c.get(f"{api}/visuals")
+            assert r.status_code == 200, r.text
+            return r.json()
+
+        jid = c.post(f"{api}/visuals/plan", json={"expected_revision": view()["revision"]})
+        jid = jid.json()["job_id"]
+        wait_for(lambda: c.get(f"/api/v1/jobs/{jid}").json()["status"] == "succeeded", timeout=120)
+        scene, want = next(
+            iter({s["scene_id"]: s["desired_kind"] for s in view()["plan"]["scenes"]}.items())
+        )
+        kind = want if want in ("document", "chart") else "archival"
+        name, creator, page = IMAGES[kind]
+        r = c.post(
+            f"{api}/visuals/import",
+            data={"expected_revision": view()["revision"], "scene_id": scene, "kind": kind,
+                  "provenance": f"Public-domain file from Wikimedia Commons: {page}",
+                  "title": name, "source_url": page, "creator": creator,
+                  "license_name": "Public domain", "license_url": PD,
+                  "attribution": f"{creator}, public domain, via Wikimedia Commons"},
+            files={"file": (name, (VISUALS / name).read_bytes(), "application/octet-stream")},
+        )  # fmt: skip
+        assert r.status_code == 200, r.text
+        cid = r.json()["result"]["candidate_id"]
+        x = next(y for y in r.json()["visuals"]["candidates"][scene] if y["id"] == cid)
+
+        letter = root / "permissions" / "commons-pd.txt"
+        letter.parent.mkdir(parents=True, exist_ok=True)
+        original = f"Public-domain status checked on {page} on 2026-11-27.\n".encode()
+        letter.write_bytes(original)
+        r = c.post(f"{api}/visuals/edit", json={
+            "expected_revision": view()["revision"],
+            "operations": [
+                {"op": "clearance.set", "candidate_id": cid,
+                 "expected_candidate_sha256": x["sha256"],
+                 "expected_rights_fingerprint": x["rights_fingerprint"],
+                 "reviewer": "Nguyễn Văn A", "basis": "public_domain_confirmed",
+                 "justification": "The Commons file page and its source both mark this exact "
+                 "image as a public-domain work.",
+                 "evidence": "permissions/commons-pd.txt",
+                 "acknowledgement": CLEARANCE_ACKNOWLEDGEMENT},
+                {"op": "shots.set", "scene_id": scene, "shots": [{"candidate_id": cid}]},
+            ],
+        })  # fmt: skip
+        assert r.status_code == 200, r.text
+        body = {
+            "expected_revision": view()["revision"],
+            "reviewer": "Nguyễn Văn A",
+            "confirm": True,
+        }
+        r = c.post(f"{api}/visuals/apply", json=body)
+        assert r.status_code == 200, r.text
+
+        def asset() -> tuple[bool, str | None, set[str]]:
+            v = view()
+            a = next(a for a in v["assets"] if cid in a["candidate_ids"])
+            codes = {
+                f["code"] for f in v["gates"]["g3"]["findings"] if a["asset_id"] in f["detail"]
+            }
+            assert "permissions/commons-pd.txt" in v["evidence_inputs"]
+            return a["rights_current"], a["rights_reason"], codes
+
+        assert asset() == (True, None, set())
+        letter.write_bytes(original + b"Edited later by someone else.\n")
+        assert asset() == (False, "evidence_changed", {"applied_image_problem"})
+        letter.unlink()
+        assert asset() == (False, "clearance_invalid", {"applied_image_problem"})
+        letter.write_bytes(original)  # the very bytes the clearance bound
+        assert asset() == (True, None, set())
