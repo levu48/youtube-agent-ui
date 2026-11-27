@@ -1,18 +1,23 @@
-"""Visuals commands of the fake engine (mirrors engine D-122 at 65c5f52, simplified).
+"""Visuals commands of the fake engine (mirrors engine D-122/D-123/D-124 at 26c608f, simplified).
 
 ``visuals-state --json`` prints the snapshot shape of the real engine (``m4-visuals-state-1``:
 revision, inputs, evidence_inputs, pending_journals, recovery_required, catalogue, plan,
 candidates, selection, applied, integrity, scenes, assets, report, gates). ``visuals-plan``,
 ``visuals-acquire`` (``--dry-run`` preview, ``--expect-preview`` + ``--allow-host``) and
 ``visuals-import --stdin`` take ``--expect-revision``, refuse ``recovery_required`` before
-anything else, and answer with ``--json`` results or the error envelope.
+anything else, and answer with ``--json`` results or the error envelope. ``visuals-edit``
+(UI-B, D-123) reads a strict patch on stdin (shots, clearances bound to the image hash and
+rights fingerprint, revocations, plan narrowing) and keeps a hash-chained clearance history;
+``visuals-apply`` installs content-addressed asset images and records ``applied.json``. G3
+follows D-124: applied, intact, currently cleared images.
 
 Modes (FAKE_MODE): ``visuals_slow`` (acquire prints a progress line every 0.05 s for ~20 s),
 ``visuals_race`` (a visuals file changes during the network phase: ``revision_mismatch``),
 ``visuals_preview_drift`` (the run's preview differs from the dry run's: ``preview_mismatch``),
 ``visuals_partial`` (some scenes fail: exit 13 ``partial_acquire_failure``),
-``visuals_state_fail`` (visuals-state exits 1). Every argv is appended to
-``visuals-calls.jsonl``.
+``visuals_state_fail`` (visuals-state exits 1), ``visuals_edit_race`` (edit: ``concurrency``),
+``visuals_apply_not_ready`` (apply: the shared-bytes ``not_ready`` refusal). Every argv is
+appended to ``visuals-calls.jsonl``.
 """
 
 from __future__ import annotations
@@ -44,6 +49,13 @@ INPUTS = (
     ASSETS, "research-plan.json", PLAN, SELECTION, CANDIDATES, PROVENANCE, APPLIED, MANIFEST,
     "render/visuals/clearance-history.json", *JOURNALS,
 )  # fmt: skip
+HISTORY = "render/visuals/clearance-history.json"
+ACKNOWLEDGEMENT = (
+    "I reviewed the source and licence of this exact image and take responsibility for this "
+    "rights decision. The tool did not verify it and it is not legal advice."
+)
+BASES = ("license_confirmed_at_source", "public_domain_confirmed", "permission_obtained",
+         "own_work", "provider_terms_reviewed")  # fmt: skip
 HOSTS = {
     "fixture": ["commons.fixture.invalid", "upload.fixture.invalid"],
     "wikimedia": ["commons.wikimedia.org", "upload.wikimedia.org"],
@@ -185,61 +197,71 @@ def state(root: Path) -> dict:
             c = next((x for x in cands if x["id"] == shot.get("candidate_id")), None)
             if c:
                 integrity[c["id"]] = _integrity(root, c)
-    scenes, facts = [], {}
+    clear = _clearances(root, cands)
+    by_id = {c["id"]: c for c in cands}
+    sel_scenes = {
+        x["scene_id"]: x.get("shots") or [] for x in (selection or {}).get("scenes") or []
+    }
+    for x in (selection or {}).get("rights_clearances") or []:
+        if x.get("candidate_id") in by_id:
+            integrity[x["candidate_id"]] = _integrity(root, by_id[x["candidate_id"]])
+    applied_scenes = (applied or {}).get("scenes") or {}
+    scenes, facts, rep_scenes, errors, unpublishable = [], {}, [], [], []
     for sc in _scenes(root):
         shots = sc.get("shots") or []
+        choices = sel_scenes.get(sc["id"]) or []
+        would = None
+        if choices and all(by_id.get(ch["candidate_id"], {}).get("sha256") for ch in choices):
+            would = [_shot(ch, by_id[ch["candidate_id"]]) for ch in choices]
+        state_ = _apply_state(shots, would, applied_scenes.get(sc["id"]), bool(choices))
         scenes.append({
+            "scene_id": sc["id"], "apply_state": state_, "draft_shots": shots,
+            "selection_shots": would, "applied_shots": applied_scenes.get(sc["id"]),
+        })  # fmt: skip
+        valid, blockers = 0, []
+        for ch in choices:
+            c = by_id.get(ch["candidate_id"])
+            if c is None:
+                errors.append(f"{sc['id']}: unknown candidate {ch['candidate_id']!r}")
+                continue
+            if _integrity(root, c) != "ok":
+                errors.append(
+                    f"{sc['id']}: image file for {c['id']} is missing or its bytes changed"
+                )
+                continue
+            valid += 1
+            if not _verified(c, clear):
+                why = f"{c['id']}: rights {c['rights']['status']}"
+                blockers.append(why)
+                unpublishable.append(f"{c['id']} ({sc['id']}): rights {c['rights']['status']}")
+        via = (
+            "selection"
+            if choices and valid == len(choices)
+            else ("existing_shots" if not choices and shots else None)
+        )
+        rep_scenes.append({
             "scene_id": sc["id"],
-            "apply_state": "existing_shots" if shots else "none",
-            "draft_shots": shots, "selection_shots": None, "applied_shots": None,
+            "disposition": "candidates_available" if by_scene.get(sc["id"]) else "no_candidates",
+            "messages": [], "selected": [ch["candidate_id"] for ch in choices],
+            "render_ready": via is not None, "ready_via": via, "publication_blockers": blockers,
+            "next_action": "review the selected image(s) and credits" if via == "selection"
+            else "choose candidate id(s) in visual-selection.json",
         })  # fmt: skip
         for shot in shots:
             aid = shot.get("asset_id")
-            if not aid:
-                continue
-            f = facts.setdefault(aid, {"asset_id": aid, "scene_ids": []})
-            f["scene_ids"].append(sc["id"])
-    asset_facts = []
-    for aid, f in facts.items():
-        rec = assets.get(aid)
-        rel = (rec or {}).get("local_path")
-        sha = Path(rel).stem if rel else None
-        p = root / rel if rel else None
-        image = (
-            None
-            if not rel
-            else "missing"
-            if not (p.is_file() or p.is_symlink())
-            else ("ok" if _sha(p) == sha else "mismatch")
-        )
-        intact = bool(rec) and (applied or {}).get("assets", {}).get(aid) == sha256_json(rec)
-        bound = ((applied or {}).get("asset_candidates") or {}).get(aid) or []
-        asset_facts.append({
-            **f, "candidate_id": bound[0] if len(bound) == 1 else None,
-            "candidate_ids": sorted(bound), "candidate_binding": "recorded" if bound else "missing",
-            "sha256": sha, "local_path": rel, "image": image, "record_intact": intact,
-            "problem": None if intact and image == "ok" and (rec or {}).get("rights_verified")
-            else "asset not releasable",
-            "credit_problems": [], "fixture": bool((rec or {}).get("fixture")),
-            "rights_current": bool((rec or {}).get("rights_verified")) and bound != [],
-            "rights_reason": None if (rec or {}).get("rights_verified") else "not_verified",
-        })  # fmt: skip
+            if aid:
+                facts.setdefault(aid, {"asset_id": aid, "scene_ids": []})["scene_ids"].append(
+                    sc["id"]
+                )
+    asset_facts = [_asset_fact(root, f, assets, applied, by_id, clear) for f in facts.values()]
+    history, history_problems = _history(root)
     plan = _read(root, PLAN, None)
-    g1 = "approved" if (root / "review.json").is_file() else "not_approved"
-    if (root / APPLIED).is_file() and g1 == "approved":
-        g1 = "stale_after_apply"
-    g3 = (
-        {"status": "pending", "findings": []}
-        if plan is None
-        else {
-            "status": "needs_review",
-            "findings": [{
-                "severity": "blocker", "stage": "visuals", "code": "visuals_selection_needed",
-                "artifact": None, "detail": f"G3: {len(scenes)} scene(s) have no selected, "
-                "applied image", "next_action": "choose candidates in visual-selection.json",
-            }],
-        }
-    )  # fmt: skip
+    g1 = "not_approved"
+    if (root / "review.json").is_file():
+        stale = (applied or {}).get("review_sha") == _sha(root / "review.json")
+        g1 = "stale_after_apply" if stale else "approved"
+    render_ready = bool(rep_scenes) and all(x["render_ready"] for x in rep_scenes) and not errors
+    g3 = _g3(plan, errors, rep_scenes, render_ready, unpublishable, scenes, asset_facts)
     pj = pending(root)
     return {
         "ok": True,
@@ -255,7 +277,8 @@ def state(root: Path) -> dict:
         "plan": plan,
         "candidates": by_scene,
         "selection": selection,
-        "clearance_history": None,
+        "clearance_history": history,
+        "clearance_history_problems": history_problems,
         "applied": applied,
         "integrity": integrity,
         "scenes": scenes,
@@ -263,25 +286,211 @@ def state(root: Path) -> dict:
         "report": {
             "schema_version": "m4-visual-report-0.1",
             "command": "visuals-state",
-            "render_ready": False,
+            "render_ready": render_ready,
             "totals": {"scenes": len(scenes), "candidates": len(cands)},
-            "errors": [],
+            "errors": errors,
             "warnings": [],
-            "scenes": [
-                {
-                    "scene_id": s["scene_id"],
-                    "disposition": "candidates_available"
-                    if by_scene.get(s["scene_id"])
-                    else "no_candidates",
-                    "messages": [],
-                }
-                for s in scenes
-            ],
-            "unpublishable": [],
+            "scenes": rep_scenes,
+            "unpublishable": unpublishable,
             "image_integrity": [],
+            "credits": [],
         },
         "gates": {"g1": {"status": g1, "findings": []}, "g3": g3},
     }
+
+
+def _fingerprint(c: dict) -> str:
+    return sha256_json(c.get("rights") or {})
+
+
+def _shot(choice: dict, c: dict) -> dict:
+    out = {"asset_id": f"img-{c['sha256'][:16]}", "motion": choice.get("motion") or "slow_zoom",
+           "fit": choice.get("fit") or "auto"}  # fmt: skip
+    if choice.get("duration_seconds") is not None:
+        out["duration_seconds"] = choice["duration_seconds"]
+    return out
+
+
+def _apply_state(draft: list, would: list | None, applied: list | None, selected: bool) -> str:
+    if not selected:
+        return "existing_shots" if draft else "none"
+    if would is not None and draft == would:
+        return "applied_current"
+    if applied is None:
+        return "draft_edited" if draft else "selected_not_applied"
+    return "changed_since_apply" if draft == applied else "draft_edited"
+
+
+def _evidence_ok(root: Path, x: dict) -> bool:
+    ref = str(x.get("evidence") or "").strip()
+    if ref.startswith(("http://", "https://")):
+        return True
+    p = root / ref
+    if not ref or ref.startswith("/") or ".." in ref.split("/") or not p.is_file():
+        return False
+    return x.get("evidence_sha256") in (None, _sha(p))
+
+
+def _clearances(root: Path, cands: list[dict]) -> dict[str, dict]:
+    """Valid clearances by candidate: bound to its bytes, fingerprint and evidence."""
+    by_id = {c["id"]: c for c in cands}
+    out = {}
+    for x in (_read(root, SELECTION, {}) or {}).get("rights_clearances") or []:
+        c = by_id.get(x.get("candidate_id"))
+        if (
+            c is not None
+            and x.get("candidate_sha256") == c.get("sha256")
+            and x.get("rights_fingerprint") == _fingerprint(c)
+            and _evidence_ok(root, x)
+        ):
+            out[c["id"]] = x
+    return out
+
+
+def _verified(c: dict, clear: dict) -> bool:
+    if c.get("placeholder") or c["rights"]["status"] in ("rejected", "not_applicable"):
+        return False
+    if c["rights"]["status"] == "accepted":
+        return True
+    return c["rights"]["status"] == "manual_review" and c["id"] in clear
+
+
+def _history(root: Path) -> tuple[dict | None, list[str]]:
+    doc = _read(root, HISTORY, None)
+    want = (_read(root, MANIFEST, {}) or {}).get("clearance_history_sha256")
+    have = _sha(root / HISTORY)
+    if have != want:
+        return doc, [f"{HISTORY} was modified outside the tool"]
+    return doc, []
+
+
+def _rights_reason(root: Path, rec: dict, bound: list[str], by_id: dict, clear: dict) -> str | None:
+    if not rec.get("rights_verified"):
+        return "not_verified"
+    if not bound or any(b not in by_id for b in bound):
+        return "candidate_missing"
+    bad = [by_id[b] for b in bound if not _verified(by_id[b], clear)]
+    if not bad:
+        return None
+    entries = (_read(root, HISTORY, {}) or {}).get("entries") or []
+    last = [e for e in entries if e.get("candidate_id") == bad[0]["id"]]
+    if last and last[-1].get("action") == "revoked":
+        return "clearance_revoked"
+    raw = next((x for x in (_read(root, SELECTION, {}) or {}).get("rights_clearances") or []
+                if x.get("candidate_id") == bad[0]["id"]), None)  # fmt: skip
+    if raw is not None and not _evidence_ok(root, raw):
+        return (
+            "evidence_changed"
+            if (root / str(raw.get("evidence"))).is_file()
+            else "clearance_invalid"
+        )
+    return "rights_changed"
+
+
+def _asset_fact(root: Path, f: dict, assets: dict, applied: dict | None, by_id: dict,
+                clear: dict) -> dict:  # fmt: skip
+    aid = f["asset_id"]
+    rec = assets.get(aid)
+    rel = (rec or {}).get("local_path")
+    sha = Path(rel).stem if rel else None
+    p = root / rel if rel else None
+    image = (
+        None if not rel
+        else "missing" if not (p.is_file() or p.is_symlink())
+        else ("ok" if _sha(p) == sha else "mismatch")
+    )  # fmt: skip
+    intact = bool(rec) and (applied or {}).get("assets", {}).get(aid) == sha256_json(rec)
+    bound = ((applied or {}).get("asset_candidates") or {}).get(aid) or []
+    if rec is None:
+        problem = "not in assets.json"
+    elif not rec.get("rights_verified"):
+        problem = "rights not verified"
+    elif not intact:
+        problem = "assets.json record was not written by visuals-apply (or was edited)"
+    elif image == "missing":
+        problem = "image file missing"
+    elif image != "ok":
+        problem = "image bytes no longer match their content address"
+    else:
+        problem = None
+    reason = _rights_reason(root, rec, bound, by_id, clear) if rec else "candidate_missing"
+    return {
+        **f, "candidate_id": bound[0] if len(bound) == 1 else None,
+        "candidate_ids": sorted(bound), "candidate_binding": "recorded" if bound else "missing",
+        "sha256": sha, "local_path": rel, "image": image, "record_intact": intact,
+        "problem": problem, "credit_problems": [], "fixture": bool((rec or {}).get("fixture")),
+        "rights_current": reason is None, "rights_reason": reason,
+    }  # fmt: skip
+
+
+def _finding(code: str, detail: str, nxt: str | None = None, artifact: str | None = None) -> dict:
+    return {"severity": "blocker", "stage": "visuals", "code": code, "artifact": artifact,
+            "detail": detail, "next_action": nxt}  # fmt: skip
+
+
+def _g3(plan, errors, rep_scenes, render_ready, unpublishable, scenes, facts) -> dict:  # noqa: ANN001
+    if plan is None:
+        return {
+            "status": "pending",
+            "findings": [
+                _finding(
+                    "visuals_not_started", "no visual-plan.json", "ytagent resume --through visuals"
+                )
+            ],
+        }
+    out = [_finding("visuals_invalid", e, "ytagent visuals-check") for e in errors]
+    if not render_ready:
+        missing = [x["scene_id"] for x in rep_scenes if not x["render_ready"]]
+        out.append(
+            _finding(
+                "visuals_selection_needed",
+                f"G3: {len(missing)} scene(s) have no selected, applied image: "
+                + ", ".join(missing[:10]),
+                "choose candidates in visual-selection.json, ytagent visuals-check, visuals-apply",
+            )
+        )
+    nxt = "record a rights clearance or choose another image"
+    out += [_finding("image_rights_not_cleared", u, nxt)
+            for u in unpublishable]  # fmt: skip
+    pending_ = [x for x in scenes if x["apply_state"] in
+                ("selected_not_applied", "changed_since_apply", "draft_edited")]  # fmt: skip
+    if pending_:
+        out.append(
+            _finding(
+                "visuals_not_applied",
+                f"G3: {len(pending_)} scene(s) do not show their selection in the draft: "
+                + ", ".join(f"{x['scene_id']} ({x['apply_state']})" for x in pending_[:10]),
+                "ytagent visuals-apply, then draft-approve",
+                "storyboard.draft.json",
+            )
+        )
+    for a in facts:
+        where = f"{a['asset_id']} ({', '.join(a['scene_ids'])})"
+        if a["problem"]:
+            out.append(
+                _finding(
+                    "applied_image_problem",
+                    f"{where}: {a['problem']}",
+                    "choose another image or ytagent visuals-apply again",
+                    "assets.json",
+                )
+            )
+        elif not a["rights_current"]:
+            revoked = a["rights_reason"] == "clearance_revoked"
+            out.append(
+                _finding(
+                    "image_rights_not_cleared" if revoked else "applied_image_problem",
+                    f"{where}: "
+                    + (
+                        "the rights clearance of the image it was applied from was revoked"
+                        if revoked
+                        else f"its rights are not current ({a['rights_reason']})"
+                    ),
+                    "record a new rights clearance or choose another image",
+                    "assets.json",
+                )
+            )
+    return {"status": "ready" if not out else "needs_review", "findings": out}
 
 
 # --------------------------------------------------------------------------- commands
@@ -390,11 +599,11 @@ def _store(root: Path, data: bytes) -> tuple[str, str]:
 def _publish(root: Path, cands: list[dict]) -> None:
     _write(root, CANDIDATES, {"schema_version": "m4-candidates-0.1", "candidates": cands})
     _write(root, PROVENANCE, {"schema_version": "m4-provenance-0.1", "runs": []})
-    _write(
-        root,
-        MANIFEST,
-        {"files": {rel: _sha(root / rel) for rel in (CANDIDATES, PROVENANCE)}},
-    )
+    keep = (_read(root, MANIFEST, {}) or {}).get("clearance_history_sha256")
+    man = {"files": {rel: _sha(root / rel) for rel in (CANDIDATES, PROVENANCE)}}
+    if keep:
+        man["clearance_history_sha256"] = keep
+    _write(root, MANIFEST, man)
     if not (root / SELECTION).exists():
         plan = _read(root, PLAN, {}) or {}
         _write(
@@ -551,6 +760,326 @@ def _import(root: Path, o: dict) -> int:
     return 0
 
 
+def _words(text: str) -> int:
+    return len([w for w in str(text).split() if len(w) > 1])
+
+
+def _edit(root: Path, o: dict, mode: str) -> int:
+    raw = sys.stdin.buffer.read(1024 * 1024 + 1)
+    with open(root / "visuals-edit-stdin.json", "wb") as fh:
+        fh.write(raw)
+    if "expect-revision" not in o:
+        return _error("invalid_input", 2, "visuals-edit needs --expect-revision")
+    if (refused := _guard(root, o)) is not None:
+        return refused
+    if mode == "visuals_edit_race":
+        return _error("concurrency", 9, "the project changed on every read attempt; try again")
+    try:
+        patch = json.loads(raw)
+        ops = patch["operations"]
+        assert isinstance(ops, list) and ops
+    except (ValueError, KeyError, AssertionError):
+        return _error("invalid_patch", 2, "the patch is invalid",
+                      details=[{"loc": "operations", "msg": "invalid",
+                                "code": "invalid"}])  # fmt: skip
+    if not (root / "review.json").is_file():
+        return _error("g1_not_current", 12, "the draft is not approved (G1)")
+    trusted, _ = _catalog(root)
+    if not trusted:
+        return _error("catalog_untrusted", 2, "the candidate catalogue is not trusted")
+    history, problems = _history(root)
+    if problems:
+        return _error(
+            "invalid_patch", 2,
+            f"{HISTORY} is not intact: {problems[0]}; every edit is refused until it is restored",
+            details=[{"loc": HISTORY, "msg": problems[0], "code": "history_tampered"}],
+        )  # fmt: skip
+    cands = (_read(root, CANDIDATES, {}) or {}).get("candidates") or []
+    by_id = {c["id"]: c for c in cands}
+    sel = _read(root, SELECTION, None) or {"schema_version": "m4-visual-selection-0.1",
+                                           "scenes": [], "rights_clearances": []}  # fmt: skip
+    plan = _read(root, PLAN, None)
+    before = (json.dumps(sel, sort_keys=True), json.dumps(plan, sort_keys=True))
+    entries = list((history or {}).get("entries") or [])
+    added, errs, touched = [], [], set()
+    scene_ids = {x["id"] for x in _scenes(root)}
+
+    def fail(i: int, op: dict, code: str, msg: str) -> None:
+        errs.append({"loc": f"operations.{i}", "msg": msg, "code": code, "op": op.get("op")})
+
+    def scene_entry(sid: str) -> dict:
+        for x in sel["scenes"]:
+            if x["scene_id"] == sid:
+                return x
+        x = {"scene_id": sid, "shots": [], "note": ""}
+        sel["scenes"].append(x)
+        return x
+
+    integrity_bad = []
+    for i, op in enumerate(ops):
+        kind = op.get("op")
+        if kind in ("shots.set", "shots.clear"):
+            if op.get("scene_id") not in scene_ids:
+                fail(i, op, "unknown_scene", f"unknown scene {op.get('scene_id')!r}")
+                continue
+            if kind == "shots.clear":
+                scene_entry(op["scene_id"])["shots"] = []
+                touched.add(SELECTION)
+                continue
+            shots = []
+            for sh in op.get("shots") or []:
+                c = by_id.get(sh.get("candidate_id"))
+                if c is None:
+                    fail(
+                        i, op, "unknown_candidate", f"unknown candidate {sh.get('candidate_id')!r}"
+                    )
+                    break
+                if not c.get("selectable"):
+                    fail(i, op, "not_selectable", f"candidate {c['id']} cannot be used")
+                    break
+                if _integrity(root, c) != "ok":
+                    integrity_bad.append(c["id"])
+                shots.append({k: v for k, v in sh.items() if v is not None})
+            else:
+                scene_entry(op["scene_id"])["shots"] = shots
+                touched.add(SELECTION)
+        elif kind == "clearance.set":
+            c = by_id.get(op.get("candidate_id"))
+            if c is None:
+                fail(i, op, "unknown_candidate", f"unknown candidate {op.get('candidate_id')!r}")
+                continue
+            if c.get("placeholder") or c["rights"]["status"] != "manual_review":
+                fail(i, op, "not_clearable", f"{c['id']} is not a manual_review image")
+                continue
+            if (op.get("expected_candidate_sha256") != c["sha256"]
+                    or op.get("expected_rights_fingerprint") != _fingerprint(c)):  # fmt: skip
+                fail(i, op, "target_changed", f"the image or rights evidence of {c['id']} changed "
+                     "since you reviewed it: review it again")  # fmt: skip
+                continue
+            problems_ = []
+            if op.get("basis") not in BASES:
+                problems_.append("basis is not allowed")
+            if _words(op.get("justification", "")) < 6:
+                problems_.append("justification must explain the decision (at least ~6 real words)")
+            if (op.get("acknowledgement") or "").strip() != ACKNOWLEDGEMENT:
+                problems_.append("acknowledgement must be exactly the text given in the template")
+            ev = str(op.get("evidence") or "").strip()
+            local = not ev.startswith(("http://", "https://"))
+            if local and not (root / ev).is_file():
+                problems_.append(f"evidence {ev!r} is not a file in the project")
+            if problems_:
+                fail(i, op, "clearance_invalid", "; ".join(problems_))
+                continue
+            if _integrity(root, c) != "ok":
+                integrity_bad.append(c["id"])
+            old = next((x for x in sel["rights_clearances"] if x["candidate_id"] == c["id"]), None)
+            rec = {"candidate_id": c["id"], "decision": "cleared", "reviewer": op["reviewer"],
+                   "decided_at": "2026-11-27T12:00:00Z", "basis": op["basis"],
+                   "justification": op["justification"], "evidence": ev,
+                   "acknowledgement": op["acknowledgement"], "candidate_sha256": c["sha256"],
+                   "rights_fingerprint": _fingerprint(c)}  # fmt: skip
+            if local:
+                rec["evidence_sha256"] = _sha(root / ev)
+            sel["rights_clearances"] = [x for x in sel["rights_clearances"]
+                                        if x["candidate_id"] != c["id"]] + [rec]  # fmt: skip
+            added.append((i, "replaced" if old else "set", c["id"], op["reviewer"], None, rec))
+            touched |= {SELECTION, HISTORY, MANIFEST}
+        elif kind == "clearance.revoke":
+            old = next((x for x in sel["rights_clearances"]
+                        if x["candidate_id"] == op.get("candidate_id")), None)  # fmt: skip
+            if old is None:
+                fail(
+                    i,
+                    op,
+                    "unknown_clearance",
+                    f"no rights clearance for {op.get('candidate_id')!r}",
+                )
+                continue
+            if _words(op.get("reason", "")) < 6:
+                fail(
+                    i,
+                    op,
+                    "reason_too_thin",
+                    "reason must explain the decision (at least ~6 real words)",
+                )
+                continue
+            sel["rights_clearances"] = [x for x in sel["rights_clearances"] if x is not old]
+            added.append((i, "revoked", old["candidate_id"], op["reviewer"], op["reason"], None))
+            touched |= {SELECTION, HISTORY, MANIFEST}
+        elif kind == "plan.update":
+            ps = next(
+                (
+                    x
+                    for x in (plan or {}).get("scenes") or []
+                    if x["scene_id"] == op.get("scene_id")
+                ),
+                None,
+            )
+            if ps is None:
+                fail(i, op, "unknown_scene", f"unknown scene {op.get('scene_id')!r}")
+                continue
+            if op.get("search_enabled") is True and not ps["search_enabled"]:
+                fail(i, op, "not_narrowing", f"visual-plan.json {ps['scene_id']}: search_enabled "
+                     f"cannot be switched on for a {ps['desired_kind']} scene")  # fmt: skip
+                continue
+            if op.get("generation_enabled") is True:
+                fail(i, op, "not_narrowing", "generation cannot be switched on")
+                continue
+            for k in ("search_query", "search_enabled", "generation_enabled", "notes"):
+                if k in op:
+                    ps[k] = op[k]
+            touched.add(PLAN)
+        else:
+            fail(i, op, "invalid", f"unknown operation {kind!r}")
+    if errs:
+        e = errs[0]
+        return _error(
+            "invalid_patch",
+            2,
+            f"operation {e['loc'].split('.')[1]} ({e['op']}) refused: {e['msg']}",
+            details=[{k: e[k] for k in ("loc", "msg", "code")} for e in errs],
+        )
+    if integrity_bad:
+        return _error("image_integrity", 2, f"image file for {integrity_bad[0]} is missing or its "
+                      "bytes changed", details={"candidate_ids": integrity_bad})  # fmt: skip
+    after = (json.dumps(sel, sort_keys=True), json.dumps(plan, sort_keys=True))
+    changed = sorted(touched) if after != before or added else []
+    hist_out = []
+    prev = sha256_json(entries[-1]) if entries else None
+    for i, action, cid, who, reason, rec in added:
+        entry = {"id": f"ch-{len(entries) + 1:05d}", "seq": len(entries) + 1, "prev_sha256": prev,
+                 "action": action, "candidate_id": cid, "at": "2026-11-27T12:00:00Z",
+                 "by_reviewer": who, "reason": reason, "clearance": rec}  # fmt: skip
+        entries.append(entry)
+        prev = sha256_json(entry)
+        hist_out.append({"op_index": i, "id": entry["id"], "action": action, "candidate_id": cid})
+    previous = revision(root)
+    dry = "dry-run" in o
+    if not dry and changed:
+        _write(root, SELECTION, sel)
+        if PLAN in touched:
+            _write(root, PLAN, plan)
+        if added:
+            _write(root, HISTORY, {"schema_version": "m4-clearance-history-1", "entries": entries})
+            man = _read(root, MANIFEST, {}) or {}
+            man["clearance_history_sha256"] = _sha(root / HISTORY)
+            _write(root, MANIFEST, man)
+    st = state(root)
+    out = {"ok": True,
+           "status": ("would_publish" if dry else "published") if changed else "already_current",
+           "dry_run": dry, "previous_revision": previous,
+           "revision": previous if dry or not changed else revision(root),
+           "changed_files": changed, "history": hist_out,
+           "check": {k: st["report"][k]
+                     for k in ("render_ready", "errors", "unpublishable")}}  # fmt: skip
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+def _apply(root: Path, o: dict, mode: str) -> int:
+    if (refused := _guard(root, o)) is not None:
+        return refused
+    if not o.get("reviewer"):
+        return _error("invalid_input", 2, "--reviewer is required")
+    if mode == "visuals_apply_not_ready":
+        msg = ("img-0123456789abcdef would get two different rights records (scene-001-imp-a, "
+               "scene-002-imp-b; scenes scene-001, scene-002)")  # fmt: skip
+        return _error(
+            "not_ready", 2, f"cannot apply visuals:\n  - {msg}", details={"errors": [msg]}
+        )
+    cands = (_read(root, CANDIDATES, {}) or {}).get("candidates") or []
+    by_id = {c["id"]: c for c in cands}
+    clear = _clearances(root, cands)
+    sel = _read(root, SELECTION, {}) or {}
+    choices = {
+        x["scene_id"]: x.get("shots") or [] for x in sel.get("scenes") or [] if x.get("shots")
+    }
+    if not choices:
+        return _error("not_ready", 2, "nothing is selected in visual-selection.json")
+    sb = _read(root, "storyboard.draft.json", {}) or {}
+    applied = _read(root, APPLIED, None) or {"assets": {}, "scenes": {}, "asset_candidates": {}}
+    assets_doc = _read(root, ASSETS, None) or {"assets": {}}
+    records = assets_doc.setdefault("assets", {})
+    conflicts, bad, changed, added, unchanged, unverified, restored = [], [], [], [], [], [], []
+    for scene in sb.get("scenes") or []:
+        picks = choices.get(scene["id"])
+        if not picks:
+            continue
+        shots = []
+        for ch in picks:
+            c = by_id.get(ch["candidate_id"])
+            if c is None or _integrity(root, c) != "ok":
+                bad.append(ch["candidate_id"])
+                continue
+            shots.append(_shot(ch, c))
+        current = scene.get("shots") or []
+        if current and current != shots and current != applied["scenes"].get(scene["id"]):
+            conflicts.append(f"{scene['id']} has shots that visuals-apply did not write "
+                             "(human-authored); pass --replace-shots to replace them")  # fmt: skip
+        if current != shots:
+            changed.append(scene["id"])
+        scene["_new"] = shots
+    if bad:
+        return _error("image_integrity", 2,
+                      f"image file for {bad[0]} is missing or its bytes changed",
+                      details={"candidate_ids": bad})  # fmt: skip
+    if conflicts:
+        return _error("human_edit_conflict", 2, "nothing was applied:\n" +
+                      "\n".join(f"  - {c}" for c in conflicts))  # fmt: skip
+    for scene in sb.get("scenes") or []:
+        shots = scene.pop("_new", None)
+        if shots is None:
+            continue
+        for ch, shot in zip(choices[scene["id"]], shots, strict=True):
+            c = by_id[ch["candidate_id"]]
+            aid = shot["asset_id"]
+            rel = f"assets/images/{c['sha256']}.png"
+            dest = root / rel
+            if not dest.is_file():
+                if aid in records:
+                    restored.append(aid)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes((root / c["local_path"]).read_bytes())
+            ok = _verified(c, clear)
+            rec = {"id": aid, "kind": c.get("kind"), "local_path": rel,
+                   "source_url": c.get("source_page_url"), "creator": c["rights"].get("creator"),
+                   "license_name": c["rights"].get("license_name"),
+                   "license_url": c["rights"].get("license_url"),
+                   "attribution": c["rights"].get("credit_line"), "rights_verified": ok,
+                   "rights_basis": ("human_attestation" if c["id"] in clear else "licence_metadata")
+                   if ok else None, "fixture": bool(c.get("placeholder"))}  # fmt: skip
+            (unchanged if records.get(aid) == rec else added).append(aid)
+            if not ok:
+                unverified.append(aid)
+            records[aid] = rec
+            applied["assets"][aid] = sha256_json(rec)
+            applied.setdefault("asset_candidates", {})[aid] = sorted(
+                set(applied["asset_candidates"].get(aid, [])) | {c["id"]}
+            )
+        scene["shots"] = shots
+        applied["scenes"][scene["id"]] = shots
+    status = (
+        "published" if changed or added else ("images_restored" if restored else "already_current")
+    )
+    written = []
+    if status == "published":
+        _write(root, "storyboard.draft.json", sb)
+        _write(root, ASSETS, assets_doc)
+        applied["review_sha"] = _sha(root / "review.json")
+        _write(root, APPLIED, applied)
+        written = ["storyboard.draft.json", ASSETS, APPLIED]
+    print("applied the visual selection", file=sys.stderr, flush=True)
+    st = state(root)
+    out = {"ok": True, "status": status, "run_id": "fake-apply", "scenes_changed": changed,
+           "assets_added": sorted(set(added)),
+           "assets_unchanged": sorted(set(unchanged) - set(added)),
+           "rights_unverified": sorted(set(unverified)), "written": written,
+           "report": st["report"], "images_restored": restored,
+           "revision": revision(root)}  # fmt: skip
+    print(json.dumps(out, indent=2))
+    return 0
+
+
 def main(cmd: str, root: Path, o: dict, argv: list[str]) -> int:
     mode = os.environ.get("FAKE_MODE", "ok")
     with open(root / "visuals-calls.jsonl", "a", encoding="utf-8") as fh:
@@ -567,5 +1096,9 @@ def main(cmd: str, root: Path, o: dict, argv: list[str]) -> int:
         return _acquire(root, o, argv, mode)
     if cmd == "visuals-import":
         return _import(root, o)
+    if cmd == "visuals-edit":
+        return _edit(root, o, mode)
+    if cmd == "visuals-apply":
+        return _apply(root, o, mode)
     print(f"error: unknown command {cmd}", file=sys.stderr)
     return 2
