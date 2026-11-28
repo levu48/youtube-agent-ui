@@ -109,6 +109,11 @@ def version_args() -> list[str]:
     return ["--version"]
 
 
+def help_args() -> list[str]:
+    """``ytagent --help``: the engine's subcommands (read-only; nothing is run)."""
+    return ["--help"]
+
+
 def create_args(root: Path, spec: CreateSpec) -> list[str]:
     idea = clean_text("idea", spec.idea, required=True)
     if spec.language not in LANGUAGES:
@@ -618,7 +623,7 @@ FIXED_VALUES = {"--image-provider": "none"}
 
 def assert_allowlisted(argv: list[str]) -> None:
     """Last line of defence before spawning: shape check of a built argv."""
-    if argv == ["--version"]:
+    if argv in (["--version"], ["--help"]):
         return
     if not argv or argv[0] not in ALLOWED_SUBCOMMANDS:
         raise ArgumentError("subcommand not allowlisted")
