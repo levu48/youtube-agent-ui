@@ -181,6 +181,16 @@ function JobOutcome({ job }: { job: Job }) {
       </p>
     );
   }
+  if (job.status === "succeeded" && job.error_code === "page_not_saved") {
+    // The engine recorded the source but did not save its page (too large, robots, …).
+    return (
+      <div className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-warning">
+        <p className="font-medium">{job.message}.</p>
+        {job.error_message ? <p className="break-words">Engine: {job.error_message}</p> : null}
+        {exit ? <p className="text-xs opacity-80">{exit}</p> : null}
+      </div>
+    );
+  }
   if (job.status === "succeeded") {
     return <p className="text-sm text-success">{job.message}. {exit}.</p>;
   }

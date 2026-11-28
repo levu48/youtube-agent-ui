@@ -494,8 +494,13 @@ def add_url(root: Path, o: dict, hosts: list[str], mode: str) -> int:
             "candidate_for": [],
         },
     )
-    outcome = "queued"
-    if fetch in ("live", "fixture"):
+    outcome, detail = "queued", ""
+    if fetch in ("live", "fixture") and mode == "add_url_too_large":
+        # The engine records the source and the refused fetch, saves no snapshot, exits 0.
+        outcome, detail = "too_large", "response from en.wikipedia.org exceeds 2097152 bytes"
+        src["state"] = "failed"
+        src.setdefault("fetches", []).append({"outcome": outcome})
+    elif fetch in ("live", "fixture"):
         _snapshot(root, index, src)
         outcome = "fetched"
     _write(root, "research.json", record)
@@ -508,6 +513,7 @@ def add_url(root: Path, o: dict, hosts: list[str], mode: str) -> int:
                 "url": url,
                 "outcome": outcome,
                 "snapshot_id": src["snapshot_ids"][0] if src["snapshot_ids"] else None,
+                "detail": detail,
                 "revision": revision(root),
             }
         )

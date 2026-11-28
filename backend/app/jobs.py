@@ -58,6 +58,39 @@ SUCCESS_MESSAGES = {
     "visuals-acquire": "Image search finished",
 }
 
+# research-add-url outcomes (engine research/fetch.py) for a page that was not saved, in words.
+NOT_SAVED = {
+    "too_large": "the page is larger than the engine's size limit",
+    "robots_disallowed": "the site's robots.txt does not allow it",
+    "bad_mime": "it is not an HTML page",
+    "no_text": "the page has no readable text",
+    "fetch_error": "the request failed",
+    "host_not_allowed": "its host was not confirmed",
+    "metadata_only": "only its metadata was recorded",
+    "url_refused": "the URL was refused",
+}
+
+
+def _success(job_type: str, stdout: list[str]) -> tuple[str, str | None, str | None]:
+    """(message, error_message, error_code) for a job the engine finished (exit 0). An added
+    URL whose page was not saved is reported as such, from the engine's own ``--json`` result
+    (no ``snapshot_id``, with its ``outcome`` and ``detail``), never as a plain success."""
+    message = SUCCESS_MESSAGES.get(job_type, "Finished")
+    if job_type != "research-add-url":
+        return message, None, None
+    doc = _json_result(stdout)
+    if doc is None:
+        return message, None, None
+    outcome = str(doc.get("outcome") or "")
+    if doc.get("snapshot_id"):
+        return "Source added and its page saved", None, None
+    if outcome == "queued":
+        return "Source added to the queue (not fetched yet)", None, None
+    why = NOT_SAVED.get(outcome, f"the engine reported {outcome or 'no snapshot'}")
+    detail = redact(str(doc.get("detail") or ""))[:300] or None
+    return f"Source recorded, but its page was not saved: {why}", detail, "page_not_saved"
+
+
 # A failed engine command that answered with the ``--json`` error envelope: its code is more
 # precise than the exit code (exit 9 covers a revision change as well as a busy project).
 ENGINE_JSON_ERRORS = {
@@ -449,8 +482,8 @@ class JobManager:
         cls = classify(rc)
         engine_msg = engine_error_line("\n".join(stderr_tail))
         if rc == 0:
-            message = SUCCESS_MESSAGES.get(row["job_type"], "Finished")
-            status, err, code = "succeeded", None, None
+            message, err, code = _success(row["job_type"], stdout_tail)
+            status = "succeeded"
         elif cancel_requested:
             status, message, err, code = "cancelled", "Cancelled by user", None, "cancelled"
         elif cls.expected_gate:
@@ -524,6 +557,19 @@ class JobManager:
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+def _json_result(lines: list[str]) -> dict | None:
+    """The engine's ``--json`` success result (``ok: true``) at the end of stdout, or None."""
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].startswith("{"):
+            continue
+        try:
+            doc = json.loads("\n".join(lines[i:]))
+        except ValueError:
+            continue
+        return doc if isinstance(doc, dict) and doc.get("ok") is True else None
+    return None
 
 
 def _json_error_code(lines: list[str]) -> str | None:
