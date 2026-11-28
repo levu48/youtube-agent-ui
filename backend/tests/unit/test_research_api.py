@@ -233,7 +233,8 @@ def test_a_queued_url_joins_the_next_preview(client, planned):
             },
         ),
     )
-    assert job["message"] == "Source added"
+    assert job["message"] == "Source added to the queue (not fetched yet)"
+    assert job["error_code"] is None
     source = client.get(f"{API}/research").json()["sources"][0]
     assert source["user_supplied"] and source["state"] == "discovered"
     preview = _preview(client)
@@ -253,14 +254,32 @@ def test_a_live_fetch_needs_its_host_confirmed(client, planned):
         json={**body, "network": True, "allow_hosts": ["other.example.net"]},
     )
     assert r.status_code == 422
-    _job(
+    job = _job(
         client,
         client.post(
             f"{API}/research/sources",
             json={**body, "network": True, "allow_hosts": ["elsewhere.example.net"]},
         ),
     )
+    assert job["message"] == "Source added and its page saved" and job["error_code"] is None
     assert client.get(f"{API}/research").json()["snapshots"]
+
+
+def test_a_page_the_engine_did_not_save_is_reported_not_called_added(client, planned, fake_cli):
+    """The engine records the source but refuses the page (too large) and exits 0: the job
+    says so, with the engine's outcome and detail, instead of a plain "Source added"."""
+    fake_cli.env["FAKE_MODE"] = "add_url_too_large"
+    url = "https://en.wikipedia.org/wiki/Vietnam_War"
+    body = {"expected_revision": _rev(client), "url": url, "fetch": "live", "network": True,
+            "allow_hosts": ["en.wikipedia.org"]}  # fmt: skip
+    job = _job(client, client.post(f"{API}/research/sources", json=body))
+    assert job["status"] == "succeeded" and job["error_code"] == "page_not_saved"
+    assert job["message"] == (
+        "Source recorded, but its page was not saved: the page is larger than the engine's "
+        "size limit"
+    )
+    assert job["error_message"] == "response from en.wikipedia.org exceeds 2097152 bytes"
+    assert not client.get(f"{API}/research").json()["snapshots"]
 
 
 def test_network_actions_can_be_turned_off(client, planned, app):

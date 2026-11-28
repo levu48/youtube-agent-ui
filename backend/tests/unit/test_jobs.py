@@ -311,3 +311,36 @@ def test_sse_replay_after_long_disconnect_is_complete(client, fake_cli):
     assert len(ids) == len(set(ids))  # nothing duplicated
     client.post(f"/api/v1/jobs/{job_id}/cancel")
     wait_for(lambda: _terminal(client, job_id))
+
+
+# --------------------------------------------------------------------------- add-url outcomes
+
+
+def _out(**doc) -> list[str]:
+    import json
+
+    return ["some log line", *json.dumps({"ok": True, **doc}, indent=2).splitlines()]
+
+
+def test_add_url_success_messages_follow_the_engine_result():
+    from app.jobs import NOT_SAVED, _success
+
+    assert _success("research-add-url", _out(outcome="fetched", snapshot_id="snap-1")) == (
+        "Source added and its page saved", None, None,
+    )  # fmt: skip
+    assert _success("research-add-url", _out(outcome="queued", snapshot_id=None))[0] == (
+        "Source added to the queue (not fetched yet)"
+    )
+    for outcome, words in NOT_SAVED.items():
+        msg, err, code = _success("research-add-url", _out(outcome=outcome, snapshot_id=None,
+                                                           detail=f"why {outcome}"))  # fmt: skip
+        assert code == "page_not_saved" and words in msg and err == f"why {outcome}"
+    msg, _err, code = _success("research-add-url", _out(outcome="something_new", snapshot_id=None))
+    assert code == "page_not_saved" and "something_new" in msg
+    # No JSON result (an older engine, or text output): the plain message, never a guess.
+    assert _success("research-add-url", ["plain text"]) == ("Source added", None, None)
+    assert _success("research-collect", _out(fetched=3)) == (
+        "Source collection finished",
+        None,
+        None,
+    )
