@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,14 @@ CAPABILITIES = [
     "visuals-plan",
     "visuals-acquire",
     "visuals-import",
+    "visuals-edit",
+    "visuals-apply",
 ]
+# The engine's visuals editing (D-123/D-124): the UI offers selection, clearances, plan
+# narrowing and apply only when the engine has both commands.
+EDITING_COMMANDS = ("visuals-edit", "visuals-apply")
+_SUBCOMMANDS_TTL = 60.0
+_USAGE_GROUP = re.compile(r"\{([a-z0-9,-]+)\}")
 MAX_PATCH_BYTES = 1024 * 1024  # the engine's own limit for a draft-edit/research-edit patch
 MAX_DOCUMENT_BYTES = 400_000 * 4  # the engine reads at most 400k characters of UTF-8
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # the engine's ImageLimits.max_bytes (visuals import)
@@ -49,6 +57,7 @@ class EngineService:
         self.read_timeout = read_timeout
         self._status_cache: dict[str, tuple[float, StatusSummary]] = {}
         self._sem = asyncio.Semaphore(4)
+        self._subcommands: tuple[float, frozenset[str] | None] | None = None
 
     async def info(self) -> EngineInfo:
         repo = home_relative(self.cli.cwd)
@@ -63,7 +72,38 @@ class EngineService:
                 reason=f"`ytagent --version` failed: {res.message}. {res.diagnostic()[:500]}",
             )
         version = res.stdout.strip().removeprefix("ytagent").strip() or res.stdout.strip()
-        return EngineInfo(available=True, version=version, repo=repo, capabilities=CAPABILITIES)
+        have = await self.subcommands()
+        caps = CAPABILITIES if have is None else [c for c in CAPABILITIES if c in have]
+        return EngineInfo(available=True, version=version, repo=repo, capabilities=caps)
+
+    async def subcommands(self) -> frozenset[str] | None:
+        """The engine's subcommands, from ``ytagent --help`` (cached for a minute, so updating
+        the engine checkout is seen without a restart). None when they cannot be read: the
+        caller then assumes the pinned engine, and the engine's own refusals stay truthful."""
+        now = time.monotonic()
+        if self._subcommands and now - self._subcommands[0] < _SUBCOMMANDS_TTL:
+            return self._subcommands[1]
+        found: frozenset[str] | None = None
+        try:
+            res = await self.cli.run(commands.help_args(), timeout=self.read_timeout)
+            m = _USAGE_GROUP.search(res.stdout) if res.ok else None
+            found = frozenset(m.group(1).split(",")) if m else None
+        except EngineUnavailable:
+            found = None
+        self._subcommands = (now, found)
+        return found
+
+    async def editing_support(self) -> tuple[bool, str | None]:
+        """Whether this engine has visuals editing (``visuals-edit`` and ``visuals-apply``)."""
+        have = await self.subcommands()
+        missing = [c for c in EDITING_COMMANDS if have is not None and c not in have]
+        if not missing:
+            return True, None
+        return False, (
+            f"This engine has no {' or '.join(missing)}: it predates visuals editing (engine "
+            "D-123/D-124). Choosing images, rights clearances, plan narrowing and apply are not "
+            "supported by this engine. Update youtube-agent to the pinned ENGINE_REF."
+        )
 
     async def create(self, root: Path, spec: commands.CreateSpec) -> EngineResult:
         return await self.cli.run(commands.create_args(root, spec), timeout=self.read_timeout)

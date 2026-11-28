@@ -467,3 +467,19 @@ describe("review fixes", () => {
     expect(within(dialog).queryByText(/same image/)).not.toBeInTheDocument(); // no shared-image explanation, old or new wording
   });
 });
+
+describe("engine support", () => {
+  it("an engine without visuals editing: the reason is shown and every edit control is disabled", async () => {
+    const reason =
+      "This engine has no visuals-edit or visuals-apply: it predates visuals editing (engine D-123/D-124). Choosing images, rights clearances, plan narrowing and apply are not supported by this engine. Update youtube-agent to the pinned ENGINE_REF.";
+    const { user } = setup({}, view({ editing: { ...view().editing, supported: false, reason } }));
+    const c1 = await card("scene-001");
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0); // in the toolbar and next to each editor
+    expect(within(c1).getByRole("button", { name: /Use as a shot: File:Harbour/ })).toBeDisabled();
+    expect(within(c1).getByRole("button", { name: /Clear rights…: Card import/ })).toBeDisabled();
+    expect(within(c1).getByRole("button", { name: /Narrow the plan/ })).toBeDisabled();
+    await user.click(screen.getByRole("tab", { name: "Validate and apply" }));
+    expect(screen.getByRole("button", { name: /Apply selection…/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Validate visuals/ })).toBeDisabled();
+  });
+});

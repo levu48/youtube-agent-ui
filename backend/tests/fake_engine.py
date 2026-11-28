@@ -261,6 +261,37 @@ def main() -> int:
     if argv == ["--version"]:
         print("ytagent 0.1.0+fake")
         return 0
+    if argv == ["--help"]:  # the subcommand list, as argparse prints it
+        cmds = [
+            "create",
+            "draft",
+            "draft-check",
+            "draft-approve",
+            "draft-edit",
+            "production-status",
+            "research-check",
+            "research-plan",
+            "research-collect",
+            "research-add-url",
+            "research-edit",
+            "research-add-document",
+            "narration-attest",
+            "narration-provenance-init",
+            "research-approve",
+            "research-apply",
+            "research-export",
+            "visuals-state",
+            "visuals-plan",
+            "visuals-acquire",
+            "visuals-import",
+            "visuals-edit",
+            "visuals-apply",
+        ]
+        if mode == "no_visuals_edit":  # an engine before D-123
+            cmds = [c for c in cmds if c not in ("visuals-edit", "visuals-apply")]
+        group = ",".join(cmds)
+        print(f"usage: ytagent [-h] [--version] [-v]\n  {{{group}}}\n  ...")
+        return 0
     cmd, o = argv[0], _opts(argv[1:])
     root = Path(o["project-root"])
     # Per-project override for browser tests: an idea containing "[slow]" drafts slowly.

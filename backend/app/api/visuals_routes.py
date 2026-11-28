@@ -57,8 +57,7 @@ _IMAGE_HEADERS = {
     "Cache-Control": "private, max-age=31536000, immutable",
 }
 EDITING = {
-    "supported": True,
-    "reason": None,
+    # "supported" and "reason" come from the engine itself (``editing_support``).
     # The engine's exact clearance acknowledgement and its bases (visuals/models.py), shown
     # verbatim; the engine refuses any other text.
     "acknowledgement": CLEARANCE_ACKNOWLEDGEMENT,
@@ -100,7 +99,8 @@ async def _view(s: AppState, row: ProjectRow, root, snap: dict) -> dict:
     # Reading and hashing the storyboard is file I/O: off the event loop, like image reads.
     out["narration"] = await asyncio.to_thread(V.scene_narrations, snap, root)
     out["network"] = {"enabled": s.settings.visuals_network, "search_provider": _provider(s)}
-    out["editing"] = EDITING
+    supported, reason = await s.engine.editing_support()
+    out["editing"] = {"supported": supported, "reason": reason, **EDITING}
     out["active_job_id"] = active.id if active else None
     return out
 
@@ -746,7 +746,11 @@ async def visuals_import(project_id: str, request: Request, s: State) -> dict:
 
 async def _write(s: AppState, row: ProjectRow, root, expected: str, what: str, call) -> dict:
     """One short engine write while holding the project: the backend's recovery and revision
-    pre-checks first, then the engine (which checks both again under its lock)."""
+    pre-checks first, then the engine (which checks both again under its lock). Refused before
+    anything runs when the engine has no visuals editing."""
+    supported, reason = await s.engine.editing_support()
+    if not supported:
+        raise ApiError(502, "engine_unsupported", reason or "Not supported by this engine.")
     with s.jobs.exclusive(row.id):
         await _precheck(s, row, root, expected)
         try:

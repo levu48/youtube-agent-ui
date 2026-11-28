@@ -444,3 +444,60 @@ def test_review_a_generic_not_ready_keeps_the_engine_items(client, imported, fak
     assert r.json()["error"]["details"]["errors"] == [
         "scene-002: candidate scene-002-cm-0123456789 is rejected and cannot be used"
     ]
+
+
+# --------------------------------------------------------------------------- engine support
+
+
+def test_the_view_reports_editing_from_the_engine_itself(client, acquired):
+    v = _view(client)
+    assert v["editing"]["supported"] is True and v["editing"]["reason"] is None
+    caps = client.get("/api/v1/system/engine").json()["capabilities"]
+    assert {"visuals-edit", "visuals-apply"} <= set(caps)
+
+
+def test_an_engine_without_visuals_editing_says_so_and_refuses_before_running(
+    fake_cli, client, settings
+):
+    """An engine before D-123 (no visuals-edit or visuals-apply in ``ytagent --help``): the
+    view says editing is not supported by this engine, the capability list is truthful, and
+    edit and apply are refused before any engine command runs."""
+    fake_cli.env["FAKE_MODE"] = "no_visuals_edit"
+    assert client.post("/api/v1/projects", json=base.PROJECT).status_code == 201
+    v = _view(client)
+    assert v["editing"]["supported"] is False
+    assert "not supported by this engine" in v["editing"]["reason"]
+    assert "visuals-edit" in v["editing"]["reason"]
+    caps = client.get("/api/v1/system/engine").json()["capabilities"]
+    assert "visuals-edit" not in caps and "visuals-apply" not in caps and "visuals-state" in caps
+    before = _writes(settings)
+    r = _edit(client, {"op": "shots.clear", "scene_id": "scene-001"}, rev=v["revision"])
+    assert r.status_code == 502 and r.json()["error"]["code"] == "engine_unsupported"
+    r = _apply(client, rev=v["revision"])
+    assert r.status_code == 502 and r.json()["error"]["code"] == "engine_unsupported"
+    assert _writes(settings) == before
+
+
+def test_help_is_allowlisted_only_alone():
+    commands.assert_allowlisted(["--help"])
+    with pytest.raises(commands.ArgumentError):
+        commands.assert_allowlisted(["--help", "--project-root=/x"])
+
+
+def test_unreadable_help_assumes_the_pinned_engine():
+    """If ``--help`` cannot be read, the UI does not invent a limitation: it assumes the
+    pinned engine, whose own refusals stay truthful."""
+    import asyncio
+
+    from app.engine.runner import EngineResult
+    from app.engine.service import EngineService
+
+    class Cli:
+        cwd = Path("/x")
+
+        async def run(self, argv, **_):
+            return EngineResult(argv, 2, "", "error: boom", 0.1)
+
+    svc = EngineService(Cli())  # type: ignore[arg-type]
+    assert asyncio.run(svc.subcommands()) is None
+    assert asyncio.run(svc.editing_support()) == (True, None)
